@@ -1,0 +1,22 @@
+[package]
+name = "espfactory"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossterm = "0.28"
+ratatui = "0.29"
+embassy-sync = { version = "0.5", features = ["std"] }
+embassy-time = { version = "0.3", features = ["std", "generic-queue"] }
+embassy-futures = "0.1"
+critical-section = { version = "1", features = ["std"] }
+scopeguard = "1"
+futures-lite = "2"
+reqwest = "0.12"
+zip = { version = "2", default-features = false, features = ["deflate", "deflate-flate2"] }
+anyhow = "1"
+csv = "1"
+serde = { version = "1", features = ["derive"] }
+bitflags = "2"
+espflash = "3"
+#esptools = { git = "http://github.com/ivmarkov/esptools" }
