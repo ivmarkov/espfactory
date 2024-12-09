@@ -43,6 +43,7 @@ impl<'a> Input<'a> {
         }
     }
 
+    #[allow(unused)]
     pub async fn swallow(&self) -> anyhow::Result<()> {
         loop {
             self.get().await?;

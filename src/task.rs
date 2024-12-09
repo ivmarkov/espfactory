@@ -16,7 +16,9 @@ use crate::bundle::{Bundle, Efuse, Image, Partition, PartitionFlags, PartitionTy
 use crate::flash;
 use crate::input::Input;
 use crate::loader::BundleLoader;
-use crate::model::{Model, Prepared, Preparing, Provisioning, ProvisioningStatus, State};
+use crate::model::{
+    Model, Prepared, Preparing, Provisioned, Provisioning, ProvisioningStatus, State,
+};
 use crate::utils::futures::{Coalesce, IntoFallibleFuture};
 
 pub struct Task<'a, T> {
@@ -41,7 +43,7 @@ where
         loop {
             self.model.modify(|state| *state = State::new());
 
-            self.prep_bundle_with_ticker(input).await?;
+            self.prepare(input).await?;
 
             if !input.wait_quit_or(KeyCode::Enter).await? {
                 break;
@@ -49,13 +51,15 @@ where
 
             self.provision().await?;
 
-            break; // TODO
+            if !input.wait_quit_or(KeyCode::Enter).await? {
+                break;
+            }
         }
 
         Ok(())
     }
 
-    async fn prep_bundle_with_ticker(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
+    async fn prepare(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         let model = self.model.clone();
 
         select3(
@@ -285,6 +289,21 @@ where
             FlashProgress::new(self.model.clone()),
         )
         .await?;
+
+        let bundle_loaded_dir = self.bundle_dir.join("loaded");
+        fs::create_dir_all(&bundle_loaded_dir)?;
+
+        bundle_loaded_dir.read_dir()?.for_each(|entry| {
+            // TODO
+            let entry = entry.unwrap();
+            fs::remove_file(entry.path()).unwrap();
+        });
+
+        self.model.modify(|state| {
+            *state = State::Provisioned(Provisioned {
+                bundle_name: state.provisioning().bundle.name.clone(),
+            });
+        });
 
         Ok(())
     }

@@ -146,5 +146,5 @@ pub struct Provisioning {
 
 #[derive(Debug)]
 pub struct Provisioned {
-    pub bundle: Bundle,
+    pub bundle_name: String,
 }

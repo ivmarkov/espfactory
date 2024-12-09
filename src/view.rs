@@ -71,7 +71,28 @@ impl Widget for &Preparing {
 
 impl Widget for &Empty {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // TODO
+        let instructions = vec![
+            " Re-try ".into(),
+            "<Enter> ".bold(),
+            "Quit ".into(),
+            "<Q> ".bold(),
+        ];
+
+        main_block(Line::from(instructions)).render(area, buf);
+
+        let layout = Layout::new(
+            Direction::Vertical,
+            [Constraint::Min(1), Constraint::Min(2), Constraint::Min(1)],
+        )
+        .split(area.inner(Margin::new(2, 2)));
+
+        Paragraph::new(Line::from(vec![
+            "Cannot fetch bundle for provisioning".into()
+        ]))
+        .bold()
+        .green()
+        .centered()
+        .render(layout[2], buf);
     }
 }
 
@@ -101,7 +122,36 @@ impl Widget for &Provisioning {
 
 impl Widget for &Provisioned {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // TODO
+        let instructions = vec![
+            " Next ".into(),
+            "<Enter> ".bold(),
+            "Quit ".into(),
+            "<Q> ".bold(),
+        ];
+
+        main_block(Line::from(instructions)).render(area, buf);
+
+        let layout = Layout::new(
+            Direction::Vertical,
+            [Constraint::Min(1), Constraint::Min(2), Constraint::Min(1)],
+        )
+        .split(area.inner(Margin::new(2, 2)));
+
+        Paragraph::new(Line::from(vec![
+            "== Bundle ".into(),
+            self.bundle_name.as_str().into(),
+            " ==".into(),
+        ]))
+        .bold()
+        .green()
+        .centered()
+        .render(layout[0], buf);
+
+        Paragraph::new(Line::from(vec!["Provisioned!".into()]))
+            .bold()
+            .green()
+            .centered()
+            .render(layout[2], buf);
     }
 }
 

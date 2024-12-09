@@ -32,6 +32,7 @@ pub trait IntoUnitFallibleFuture {
 
 impl<T> IntoUnitFallibleFuture for T where T: Future {}
 
+#[allow(unused)]
 pub trait IntoUnitFuture {
     /// Convert a future into a future that returns `()`
     async fn into_unit(self)
