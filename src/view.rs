@@ -7,7 +7,7 @@ use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Widget};
 use ratatui::DefaultTerminal;
 
-use crate::bundle::{Bundle, Image, Partition};
+use crate::bundle::{Bundle, Partition};
 use crate::model::{
     Empty, Model, Prepared, Preparing, Provisioned, Provisioning, ProvisioningStatus, State,
 };
@@ -79,9 +79,7 @@ impl Widget for &Prepared {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let pb = ProvisionedBundle {
             bundle: &self.bundle,
-            bootloader_status: None,
-            part_table_status: ProvisioningStatus::Pending,
-            images_status: None,
+            provisioning: false,
             efuses_status: None,
         };
 
@@ -93,9 +91,7 @@ impl Widget for &Provisioning {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let pb = ProvisionedBundle {
             bundle: &self.bundle,
-            bootloader_status: None,
-            part_table_status: ProvisioningStatus::Pending,
-            images_status: Some(&self.images_status),
+            provisioning: true,
             efuses_status: Some(&self.efuses_status),
         };
 
@@ -111,23 +107,17 @@ impl Widget for &Provisioned {
 
 struct ProvisionedBundle<'a> {
     bundle: &'a Bundle,
-    bootloader_status: Option<ProvisioningStatus>,
-    part_table_status: ProvisioningStatus,
-    images_status: Option<&'a HashMap<String, ProvisioningStatus>>,
+    provisioning: bool,
     efuses_status: Option<&'a HashMap<String, ProvisioningStatus>>,
 }
 
 impl<'a> ProvisionedBundle<'a> {
-    fn mark_available<'r>(
-        mut row: Row<'r>,
-        image_available: bool,
-        status: Option<&ProvisioningStatus>,
-    ) -> Row<'r> {
-        if image_available {
+    fn mark_available<'r>(mut row: Row<'r>, status: Option<&ProvisioningStatus>) -> Row<'r> {
+        if let Some(status) = status {
             row = row.bold();
 
-            row = match status.unwrap() {
-                ProvisioningStatus::Pending => row.white(),
+            row = match status {
+                ProvisioningStatus::NotStarted | ProvisioningStatus::Pending => row.white(),
                 ProvisioningStatus::InProgress(_) => row.yellow(),
                 ProvisioningStatus::Done => row.green(),
             };
@@ -153,6 +143,7 @@ impl<'a> ProvisionedBundle<'a> {
 
     fn status_string(status: Option<&ProvisioningStatus>) -> String {
         match status {
+            Some(ProvisioningStatus::NotStarted) => "Not Started".into(),
             Some(ProvisioningStatus::Pending) => "Pending".into(),
             Some(ProvisioningStatus::InProgress(progress)) => format!("{}%", *progress).into(),
             Some(ProvisioningStatus::Done) => "Done".into(),
@@ -165,7 +156,7 @@ impl Widget for &ProvisionedBundle<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let mut instructions = vec![];
 
-        if self.images_status.is_none() {
+        if !self.provisioning {
             instructions.extend_from_slice(&[
                 " Provision ".into(),
                 "<Enter> ".bold(),
@@ -207,72 +198,12 @@ impl Widget for &ProvisionedBundle<'_> {
             .render(layout[1], buf);
 
         Table::new(
-            core::iter::once({
+            self.bundle.partitions.iter().map(|partition| {
                 let row = Row::new::<Vec<Cell>>(vec![
-                    ProvisionedBundle::active_string(self.bootloader_status.as_ref()).into(),
-                    "(bootloader)".into(),
-                    "".into(),
-                    "".into(),
-                    Text::raw(Partition::any_offset_string(0x1000))
-                        .right_aligned()
-                        .into(), // TODO: Chip specific
-                    Text::raw(Partition::any_size_string(56 * 1024))
-                        .right_aligned()
-                        .into(), // TODO: Part table offset specific
-                    "-".into(),
-                    Text::raw(
-                        self.bundle
-                            .bootloader
-                            .as_ref()
-                            .map(|image| image.size_string())
-                            .unwrap_or("-".into()),
+                    ProvisionedBundle::active_string(
+                        partition.image.as_ref().map(|image| &image.status),
                     )
-                    .right_aligned()
                     .into(),
-                    ProvisionedBundle::status_string(self.bootloader_status.as_ref()).into(),
-                ]);
-
-                ProvisionedBundle::mark_available(
-                    row,
-                    self.bundle.bootloader.is_some(),
-                    self.bootloader_status.as_ref(),
-                )
-            })
-            .chain(core::iter::once({
-                let row = Row::new::<Vec<Cell>>(vec![
-                    ProvisionedBundle::active_string(Some(&self.part_table_status)).into(),
-                    "(part-table)".into(),
-                    "".into(),
-                    "".into(),
-                    Text::raw(Partition::any_offset_string(0x8000))
-                        .right_aligned()
-                        .into(), // TODO
-                    Text::raw(Partition::any_size_string(4096))
-                        .right_aligned()
-                        .into(),
-                    "".into(),
-                    Text::raw(Image::any_size_string(4096))
-                        .right_aligned()
-                        .into(), // TODO
-                    ProvisionedBundle::status_string(Some(&self.part_table_status)).into(),
-                ]);
-
-                ProvisionedBundle::mark_available(row, true, Some(&self.part_table_status))
-            }))
-            .chain(self.bundle.partitions.iter().map(|partition| {
-                let image = self
-                    .bundle
-                    .images
-                    .iter()
-                    .find(|image| image.name == partition.name);
-                let image_status = image.is_some().then(|| {
-                    self.images_status
-                        .and_then(|status| status.get(&partition.name).cloned())
-                        .unwrap_or(ProvisioningStatus::Pending)
-                });
-
-                let row = Row::new::<Vec<Cell>>(vec![
-                    ProvisionedBundle::active_string(image_status.as_ref()).into(),
                     partition.name.clone().into(),
                     partition.part_type.as_str().to_string().into(),
                     partition.part_subtype.clone().into(),
@@ -280,17 +211,25 @@ impl Widget for &ProvisionedBundle<'_> {
                     Text::raw(partition.size_string()).right_aligned().into(),
                     "-".into(),
                     Text::raw(
-                        image
-                            .map(|image| image.size_string())
+                        partition
+                            .image
+                            .as_ref()
+                            .map(|image| Partition::any_size_string(image.data.len()))
                             .unwrap_or("-".to_string()),
                     )
                     .right_aligned()
                     .into(),
-                    ProvisionedBundle::status_string(image_status.as_ref()).into(),
+                    ProvisionedBundle::status_string(
+                        partition.image.as_ref().map(|image| &image.status),
+                    )
+                    .into(),
                 ]);
 
-                ProvisionedBundle::mark_available(row, image.is_some(), image_status.as_ref())
-            })),
+                ProvisionedBundle::mark_available(
+                    row,
+                    partition.image.as_ref().map(|image| &image.status),
+                )
+            }),
             vec![
                 Constraint::Length(1),
                 Constraint::Length(15),
@@ -300,7 +239,7 @@ impl Widget for &ProvisionedBundle<'_> {
                 Constraint::Length(17),
                 Constraint::Length(15),
                 Constraint::Length(17),
-                Constraint::Length(8),
+                Constraint::Length(11),
             ],
         )
         .header(
@@ -313,7 +252,7 @@ impl Widget for &ProvisionedBundle<'_> {
                 Text::raw("Size").right_aligned().into(),
                 "Flags".into(),
                 Text::raw("Image").right_aligned().into(),
-                Text::raw("Status").right_aligned().into(),
+                Text::raw("Provision").right_aligned().into(),
             ])
             .gray(),
         )

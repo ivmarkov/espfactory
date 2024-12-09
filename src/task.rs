@@ -1,21 +1,15 @@
-use std::borrow::Cow;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crossterm::event::KeyCode;
-use embassy_futures::select::{select, select3};
+use embassy_futures::select::select3;
 use embassy_time::{Duration, Ticker};
 
-use espflash::connection::reset::{ResetAfterOperation, ResetBeforeOperation};
-use espflash::elf::RomSegment;
 use espflash::flasher::ProgressCallbacks;
-use espflash::targets::Chip;
-use log::debug;
 use serde::Deserialize;
 
-use serialport::{FlowControl, SerialPortInfo, SerialPortType, UsbPortInfo};
 use zip::ZipArchive;
 
 use crate::bundle::{Bundle, Efuse, Image, Partition, PartitionFlags, PartitionType};
@@ -97,7 +91,30 @@ where
         let mut zip = ZipArchive::new(File::open(bundle_path)?)?;
 
         let mut partitions = Vec::new();
-        let mut offset = 0;
+
+        let part_table_offset = 0x8000; // TODO
+
+        partitions.push(Partition {
+            name: "(bootloader)".to_string(),
+            part_type: PartitionType::Data, // TODO
+            part_subtype: String::new(),
+            offset: 0x1000, // TODO: Not for all chips
+            size: part_table_offset - 0x1000,
+            flags: PartitionFlags::ENCRYPTED, // TODO
+            image: None,
+        });
+
+        partitions.push(Partition {
+            name: "(part-table)".to_string(),
+            part_type: PartitionType::Data, // TODO
+            part_subtype: String::new(),
+            offset: part_table_offset,
+            size: 4096,
+            flags: PartitionFlags::ENCRYPTED, // TODO
+            image: None,
+        });
+
+        let mut offset = part_table_offset + 4096;
 
         for rp in csv::ReaderBuilder::new()
             .has_headers(false)
@@ -119,24 +136,35 @@ where
 
         let image_names = zip
             .file_names()
-            .filter_map(|name| name.starts_with("images/").then_some(name.to_string()))
-            .collect::<Vec<_>>();
-
-        let images = image_names
-            .into_iter()
-            .map(|name| {
-                let mut zip_file = zip.by_name(name.as_str()).unwrap();
-
-                let mut data = Vec::new();
-                zip_file.read_to_end(&mut data).unwrap();
-
-                Image {
-                    name: name.strip_prefix("images/").unwrap().to_string(),
-                    file_name: name,
-                    data: Arc::new(data),
+            .filter_map(|name| {
+                if name == "bootloader" || name.starts_with("images/") {
+                    Some(name.to_string())
+                } else {
+                    None
                 }
             })
             .collect::<Vec<_>>();
+
+        for name in image_names {
+            let mut zip_file = zip.by_name(&name).unwrap();
+
+            let mut data = Vec::new();
+            zip_file.read_to_end(&mut data).unwrap();
+
+            let data = Image {
+                data: Arc::new(data),
+                status: ProvisioningStatus::NotStarted,
+            };
+
+            let partition = partitions.iter_mut().find(|partition| {
+                partition.name == name
+                    || Some(partition.name.as_ref()) == name.strip_prefix("images/")
+            });
+
+            if let Some(partition) = partition {
+                partition.image = Some(data);
+            }
+        }
 
         let efuse_names = zip
             .file_names()
@@ -159,26 +187,11 @@ where
             })
             .collect::<Vec<_>>();
 
-        let bootloader = if let Some(mut zip_file) = zip.by_name("bootloader").ok() {
-            let mut data = Vec::new();
-            zip_file.read_to_end(&mut data).unwrap();
-
-            Some(Image {
-                name: "(bootloader)".to_string(),
-                file_name: "bootloader".to_string(),
-                data: Arc::new(data),
-            })
-        } else {
-            None
-        };
-
         self.model.modify(|state| {
             *state = State::Prepared(Prepared {
                 bundle: Bundle {
                     name: bundle_name,
-                    bootloader,
                     partitions,
-                    images,
                     efuses,
                 },
             })
@@ -239,26 +252,15 @@ where
         self.model.modify(|state| {
             *state = State::Provisioning(Provisioning {
                 bundle: state.prepared().bundle.clone(),
-                bootloader_status: None,
-                images_status: Default::default(),
                 efuses_status: Default::default(),
             });
 
             let ps = state.provisioning_mut();
 
-            for image in ps
-                .bundle
-                .images
-                .iter()
-                .map(|image| image.name.clone())
-                .collect::<Vec<_>>()
-            {
-                ps.images_status
-                    .insert(image, ProvisioningStatus::InProgress(0));
-            }
-
-            if ps.bundle.bootloader.is_some() {
-                ps.bootloader_status = Some(ProvisioningStatus::InProgress(0));
+            for partition in &mut ps.bundle.partitions {
+                if let Some(image) = partition.image.as_mut() {
+                    image.status = ProvisioningStatus::Pending;
+                }
             }
         });
 
@@ -266,16 +268,14 @@ where
             let ps = state.provisioning();
 
             ps.bundle
-                .images
+                .partitions
                 .iter()
-                .filter_map(|image| {
-                    ps.bundle
-                        .partitions
-                        .iter()
-                        .find(|partition| partition.name == image.name)
-                        .map(|partition| (image.data.clone(), partition.offset))
+                .filter_map(|partition| {
+                    partition
+                        .image
+                        .as_ref()
+                        .map(|image| (image.data.clone(), partition.offset))
                 })
-                .chain(ps.bundle.bootloader.iter().map(|bl| (bl.data.clone(), 0)))
                 .collect::<Vec<_>>()
         });
 
@@ -323,6 +323,7 @@ impl UnprocessedPartition {
             offset: Self::offset(&self.offset).unwrap_or(offset),
             size: Self::size(&self.size),
             flags: PartitionFlags::ENCRYPTED, //self.flags,
+            image: None,
         })
     }
 
@@ -388,12 +389,17 @@ impl ProgressCallbacks for FlashProgress {
             self.model.modify(|state| {
                 let ps = state.provisioning_mut();
 
-                if image.0 == "(bootloader)" {
-                    if let Some(status) = ps.bootloader_status.as_mut() {
-                        *status = ProvisioningStatus::InProgress((current * 100 / image.1) as u8);
+                let partition = ps
+                    .bundle
+                    .partitions
+                    .iter_mut()
+                    .find(|partition| partition.name == image.0);
+
+                if let Some(partition) = partition {
+                    if let Some(imaged) = partition.image.as_mut() {
+                        imaged.status =
+                            ProvisioningStatus::InProgress((current * 100 / image.1) as u8);
                     }
-                } else if let Some(status) = ps.images_status.get_mut(&image.0) {
-                    *status = ProvisioningStatus::InProgress((current * 100 / image.1) as u8);
                 }
             });
         }

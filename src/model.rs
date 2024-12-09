@@ -132,6 +132,7 @@ pub struct Prepared {
 
 #[derive(Debug, Clone)]
 pub enum ProvisioningStatus {
+    NotStarted,
     Pending,
     InProgress(u8),
     Done,
@@ -140,8 +141,6 @@ pub enum ProvisioningStatus {
 #[derive(Debug)]
 pub struct Provisioning {
     pub bundle: Bundle,
-    pub bootloader_status: Option<ProvisioningStatus>,
-    pub images_status: HashMap<String, ProvisioningStatus>,
     pub efuses_status: HashMap<String, ProvisioningStatus>,
 }
 

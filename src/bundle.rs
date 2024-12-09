@@ -6,36 +6,15 @@ use bitflags::bitflags;
 
 use serde::Deserialize;
 
+use crate::model::ProvisioningStatus;
+
 extern crate alloc;
 
 #[derive(Clone, Debug)]
 pub struct Bundle {
     pub name: String,
     pub partitions: Vec<Partition>,
-    pub bootloader: Option<Image>,
-    pub images: Vec<Image>,
     pub efuses: Vec<Efuse>,
-}
-
-#[derive(Clone, Debug)]
-pub struct Image {
-    pub file_name: String,
-    pub name: String,
-    pub data: Arc<Vec<u8>>,
-}
-
-impl Image {
-    pub fn any_size_string(size: usize) -> String {
-        format!(
-            "{}KB (0x{:06x})",
-            size / 1024 + if size % 1024 > 0 { 1 } else { 0 },
-            size
-        )
-    }
-
-    pub fn size_string(&self) -> String {
-        Self::any_size_string(self.data.len())
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -80,6 +59,12 @@ bitflags! {
 }
 
 #[derive(Debug, Clone)]
+pub struct Image {
+    pub data: Arc<Vec<u8>>,
+    pub status: ProvisioningStatus,
+}
+
+#[derive(Debug, Clone)]
 pub struct Partition {
     pub name: String,
     pub part_type: PartitionType,
@@ -87,6 +72,7 @@ pub struct Partition {
     pub offset: usize,
     pub size: usize,
     pub flags: PartitionFlags,
+    pub image: Option<Image>,
 }
 
 impl Partition {
@@ -96,6 +82,12 @@ impl Partition {
 
     pub fn size_string(&self) -> String {
         Self::any_size_string(self.size)
+    }
+
+    pub fn image_size_string(&self) -> Option<String> {
+        self.image
+            .as_ref()
+            .map(|image| Self::any_size_string(image.data.len()))
     }
 
     pub fn any_offset_string(offset: usize) -> String {
