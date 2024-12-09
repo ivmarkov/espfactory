@@ -1,7 +1,16 @@
 [package]
 name = "espfactory"
 version = "0.1.0"
+authors = ["Ivan Markov <ivan.markov@gmail.com>"]
 edition = "2021"
+resolver = "2"
+categories = ["embedded", "hardware-support"]
+keywords = ["embedded", "esp32"]
+description = "A utility for flashing/provisioning ESP32 PCBs at the factory premises"
+repository = "https://github.com/ivmarkov/espfactory"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+rust-version = "1.83"
 
 [dependencies]
 crossterm = "0.28"
