@@ -46,7 +46,7 @@ impl Widget for &Preparing {
     fn render(self, area: Rect, buf: &mut Buffer) {
         const PROGRESS: &[char] = &['-', '\\', '|', '/'];
 
-        let instructions = Line::from(vec![" Quit ".into(), "<Q> ".blue().bold()]);
+        let instructions = Line::from(vec![" Quit ".into(), "<Esc> ".blue().bold()]);
 
         let counter_text = Text::from(vec![Line::from(vec![
             if self.status.is_empty() {
@@ -71,7 +71,7 @@ impl Widget for &Empty {
             " Re-try ".into(),
             "<Enter> ".bold(),
             "Quit ".into(),
-            "<Q> ".bold(),
+            "<Esc> ".bold(),
         ];
 
         main_block(Line::from(instructions)).render(area, buf);
@@ -120,7 +120,7 @@ impl Widget for &Provisioned {
             " Next ".into(),
             "<Enter> ".bold(),
             "Quit ".into(),
-            "<Q> ".bold(),
+            "<Esc> ".bold(),
         ];
 
         main_block(Line::from(instructions)).render(area, buf);
@@ -203,7 +203,7 @@ impl Widget for &ProvisionedBundle<'_> {
                 " Provision ".into(),
                 "<Enter> ".bold(),
                 "Quit ".into(),
-                "<Q> ".bold(),
+                "<Esc> ".bold(),
             ]);
         }
 

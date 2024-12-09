@@ -25,7 +25,7 @@ impl<'a> Input<'a> {
 
     pub async fn wait_quit(&self) -> anyhow::Result<()> {
         loop {
-            if self.get().await? == KeyCode::Char('q') {
+            if self.get().await? == KeyCode::Esc {
                 return Ok(());
             }
         }
@@ -37,7 +37,7 @@ impl<'a> Input<'a> {
 
             if got == code {
                 return Ok(true);
-            } else if got == KeyCode::Char('q') {
+            } else if got == KeyCode::Esc {
                 return Ok(false);
             }
         }
