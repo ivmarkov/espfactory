@@ -1,25 +1,26 @@
 use std::fs::{self, File};
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+
+use alloc::sync::Arc;
 
 use crossterm::event::KeyCode;
+
 use embassy_futures::select::select3;
 use embassy_time::{Duration, Ticker};
 
 use espflash::flasher::ProgressCallbacks;
-use serde::Deserialize;
 
 use zip::ZipArchive;
 
-use crate::bundle::{Bundle, Efuse, Image, Partition, PartitionFlags, PartitionType};
+use crate::bundle::{Bundle, ProvisioningStatus};
 use crate::flash;
 use crate::input::Input;
 use crate::loader::BundleLoader;
-use crate::model::{
-    Model, Prepared, Preparing, Provisioned, Provisioning, ProvisioningStatus, State,
-};
+use crate::model::{Model, Prepared, Preparing, Provisioned, Provisioning, State};
 use crate::utils::futures::{Coalesce, IntoFallibleFuture};
+
+extern crate alloc;
 
 pub struct Task<'a, T> {
     model: Arc<Model>,
@@ -94,112 +95,10 @@ where
 
         let mut zip = ZipArchive::new(File::open(bundle_path)?)?;
 
-        let mut partitions = Vec::new();
+        let bundle = Bundle::create(bundle_name, &mut zip)?;
 
-        let part_table_offset = 0x8000; // TODO
-
-        partitions.push(Partition {
-            name: "(bootloader)".to_string(),
-            part_type: PartitionType::Data, // TODO
-            part_subtype: String::new(),
-            offset: 0x1000, // TODO: Not for all chips
-            size: part_table_offset - 0x1000,
-            flags: PartitionFlags::ENCRYPTED, // TODO
-            image: None,
-        });
-
-        partitions.push(Partition {
-            name: "(part-table)".to_string(),
-            part_type: PartitionType::Data, // TODO
-            part_subtype: String::new(),
-            offset: part_table_offset,
-            size: 4096,
-            flags: PartitionFlags::ENCRYPTED, // TODO
-            image: None,
-        });
-
-        let mut offset = part_table_offset + 4096;
-
-        for rp in csv::ReaderBuilder::new()
-            .has_headers(false)
-            .delimiter(b',')
-            .double_quote(false)
-            .escape(Some(b'\\'))
-            .flexible(true)
-            .comment(Some(b'#'))
-            .from_reader(zip.by_name("partition-table.csv")?)
-            .deserialize::<UnprocessedPartition>()
-        {
-            let rp = rp?;
-
-            let partition = rp.process(offset)?;
-            offset = partition.offset + partition.size;
-
-            partitions.push(partition);
-        }
-
-        let image_names = zip
-            .file_names()
-            .filter_map(|name| {
-                if name == "bootloader" || name.starts_with("images/") {
-                    Some(name.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        for name in image_names {
-            let mut zip_file = zip.by_name(&name).unwrap();
-
-            let mut data = Vec::new();
-            zip_file.read_to_end(&mut data).unwrap();
-
-            let data = Image {
-                data: Arc::new(data),
-                status: ProvisioningStatus::NotStarted,
-            };
-
-            let partition = partitions.iter_mut().find(|partition| {
-                partition.name == name
-                    || Some(partition.name.as_ref()) == name.strip_prefix("images/")
-            });
-
-            if let Some(partition) = partition {
-                partition.image = Some(data);
-            }
-        }
-
-        let efuse_names = zip
-            .file_names()
-            .filter_map(|name| name.starts_with("efuse/").then_some(name.to_string()))
-            .collect::<Vec<_>>();
-
-        let efuses = efuse_names
-            .into_iter()
-            .map(|name| {
-                let mut zip_file = zip.by_name(name.as_str()).unwrap();
-
-                let mut data = Vec::new();
-                zip_file.read_to_end(&mut data).unwrap();
-
-                Efuse {
-                    name: name.strip_prefix("efuse/").unwrap().to_string(),
-                    file_name: name,
-                    data: Arc::new(data),
-                }
-            })
-            .collect::<Vec<_>>();
-
-        self.model.modify(|state| {
-            *state = State::Prepared(Prepared {
-                bundle: Bundle {
-                    name: bundle_name,
-                    partitions,
-                    efuses,
-                },
-            })
-        });
+        self.model
+            .modify(move |state| *state = State::Prepared(Prepared { bundle }));
 
         Ok(())
     }
@@ -261,31 +160,17 @@ where
 
             let ps = state.provisioning_mut();
 
-            for partition in &mut ps.bundle.partitions {
-                if let Some(image) = partition.image.as_mut() {
-                    image.status = ProvisioningStatus::Pending;
-                }
-            }
+            ps.bundle.set_status_all(ProvisioningStatus::Pending);
         });
 
-        let images = self.model.get(|state| {
-            let ps = state.provisioning();
-
-            ps.bundle
-                .partitions
-                .iter()
-                .filter_map(|partition| {
-                    partition
-                        .image
-                        .as_ref()
-                        .map(|image| (image.data.clone(), partition.offset))
-                })
-                .collect::<Vec<_>>()
-        });
+        let flash_data = self
+            .model
+            .get(|state| state.provisioning().bundle.get_flash_data().collect());
 
         flash::flash(
             "/dev/ttyUSB0",
-            images,
+            Some(espflash::flasher::FlashSize::_8Mb), // TODO: Should be configurable
+            flash_data,
             FlashProgress::new(self.model.clone()),
         )
         .await?;
@@ -321,61 +206,9 @@ where
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct UnprocessedPartition {
-    pub name: String,
-    pub part_type: String, //PartitionType,
-    pub part_subtype: String,
-    pub offset: String,
-    pub size: String,
-    pub flags: String,
-}
-
-impl UnprocessedPartition {
-    fn process(&self, offset: usize) -> anyhow::Result<Partition> {
-        // TODO
-
-        Ok(Partition {
-            name: self.name.clone(),
-            part_type: PartitionType::App, // self.part_type.parse()?,
-            part_subtype: self.part_subtype.trim().to_string(),
-            offset: Self::offset(&self.offset).unwrap_or(offset),
-            size: Self::size(&self.size),
-            flags: PartitionFlags::ENCRYPTED, //self.flags,
-            image: None,
-        })
-    }
-
-    fn offset(offset: &str) -> Option<usize> {
-        let offset = offset.trim().to_ascii_lowercase();
-
-        if offset.is_empty() {
-            None
-        } else if let Some(offset) = offset.strip_prefix("0x") {
-            Some(usize::from_str_radix(offset, 16).unwrap()) // TODO
-        } else {
-            Some(offset.parse().unwrap())
-        }
-    }
-
-    fn size(size: &str) -> usize {
-        let size = size.trim().to_ascii_lowercase();
-
-        if let Some(size) = size.strip_suffix("k") {
-            size.parse::<usize>().unwrap() * 1024
-        } else if let Some(size) = size.strip_suffix("m") {
-            size.parse::<usize>().unwrap() * 1024 * 1024
-        } else if let Some(size) = size.strip_prefix("0x") {
-            usize::from_str_radix(size, 16).unwrap() // TODO
-        } else {
-            size.parse().unwrap()
-        }
-    }
-}
-
 struct FlashProgress {
     model: Arc<Model>,
-    image: Mutex<Option<(String, usize)>>,
+    image: Mutex<Option<(u32, usize)>>,
 }
 
 impl FlashProgress {
@@ -389,60 +222,35 @@ impl FlashProgress {
 
 impl ProgressCallbacks for FlashProgress {
     fn init(&mut self, addr: u32, total: usize) {
-        self.model.get(|state| {
-            let ps = state.provisioning();
+        *self.image.lock().unwrap() = Some((addr, total));
 
-            if let Some(partition) = ps
+        self.model.modify(|state| {
+            state
+                .provisioning_mut()
                 .bundle
-                .partitions
-                .iter()
-                .find(|partition| partition.offset == addr as usize)
-            {
-                *self.image.lock().unwrap() = Some((partition.name.clone(), total));
-            }
+                .set_status(addr, ProvisioningStatus::InProgress(0));
         });
     }
 
     fn update(&mut self, current: usize) {
-        if let Some(image) = self.image.lock().unwrap().as_ref() {
+        if let Some((addr, total)) = *self.image.lock().unwrap() {
             self.model.modify(|state| {
-                let ps = state.provisioning_mut();
-
-                let partition = ps
-                    .bundle
-                    .partitions
-                    .iter_mut()
-                    .find(|partition| partition.name == image.0);
-
-                if let Some(partition) = partition {
-                    if let Some(imaged) = partition.image.as_mut() {
-                        imaged.status =
-                            ProvisioningStatus::InProgress((current * 100 / image.1) as u8);
-                    }
-                }
+                state.provisioning_mut().bundle.set_status(
+                    addr,
+                    ProvisioningStatus::InProgress((current * 100 / total) as u8),
+                );
             });
         }
     }
 
     fn finish(&mut self) {
-        if let Some(image) = self.image.lock().unwrap().as_ref() {
+        if let Some((addr, _)) = self.image.lock().unwrap().take() {
             self.model.modify(|state| {
-                let ps = state.provisioning_mut();
-
-                let partition = ps
+                state
+                    .provisioning_mut()
                     .bundle
-                    .partitions
-                    .iter_mut()
-                    .find(|partition| partition.name == image.0);
-
-                if let Some(partition) = partition {
-                    if let Some(imaged) = partition.image.as_mut() {
-                        imaged.status = ProvisioningStatus::Done;
-                    }
-                }
+                    .set_status(addr, ProvisioningStatus::Done);
             });
         }
-
-        *self.image.lock().unwrap() = None;
     }
 }

@@ -6,15 +6,18 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use espflash::connection::reset::{ResetAfterOperation, ResetBeforeOperation};
 use espflash::elf::RomSegment;
-use espflash::flasher::{Flasher, ProgressCallbacks};
+use espflash::flasher::{FlashSize, Flasher, ProgressCallbacks};
 use espflash::targets::Chip;
 
 use log::debug;
 use serialport::{FlowControl, SerialPortInfo, SerialPortType, UsbPortInfo};
 
+use crate::bundle::FlashData;
+
 pub async fn flash<P>(
     port: &str,
-    images: Vec<(Arc<Vec<u8>>, usize)>,
+    flash_size: Option<FlashSize>,
+    flash_data: Vec<FlashData>,
     mut progress: P,
 ) -> anyhow::Result<()>
 where
@@ -29,11 +32,15 @@ where
         std::thread::spawn(move || {
             let mut flasher = new(&port).unwrap();
 
-            let segments = images
+            if let Some(flash_size) = flash_size {
+                flasher.set_flash_size(flash_size);
+            }
+
+            let segments = flash_data
                 .iter()
-                .map(|(data, offset)| RomSegment {
-                    addr: *offset as u32,
-                    data: Cow::Borrowed(data.as_ref()),
+                .map(|data| RomSegment {
+                    addr: data.offsert,
+                    data: Cow::Borrowed(data.data.as_ref()),
                 })
                 .collect::<Vec<_>>();
 
@@ -53,9 +60,7 @@ where
 }
 
 fn new(port: &str) -> anyhow::Result<Flasher> {
-    let ports = detect_usb_serial_ports(true).unwrap_or_default();
-
-    let port_info = find_serial_port(&ports, port)?;
+    let port_info = get_serial_port_info(port)?;
 
     let serial_port = serialport::new(port_info.port_name, 112500)
         .flow_control(FlowControl::None)

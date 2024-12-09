@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::Stylize;
@@ -7,10 +5,8 @@ use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Widget};
 use ratatui::DefaultTerminal;
 
-use crate::bundle::{Bundle, Partition};
-use crate::model::{
-    Empty, Model, Prepared, Preparing, Provisioned, Provisioning, ProvisioningStatus, State,
-};
+use crate::bundle::{Bundle, ProvisioningStatus};
+use crate::model::{Empty, Model, Prepared, Preparing, Provisioned, Provisioning, State};
 
 pub struct View<'a, 'b> {
     model: &'a Model,
@@ -101,7 +97,6 @@ impl Widget for &Prepared {
         let pb = ProvisionedBundle {
             bundle: &self.bundle,
             provisioning: false,
-            efuses_status: None,
         };
 
         pb.render(area, buf);
@@ -113,7 +108,6 @@ impl Widget for &Provisioning {
         let pb = ProvisionedBundle {
             bundle: &self.bundle,
             provisioning: true,
-            efuses_status: Some(&self.efuses_status),
         };
 
         pb.render(area, buf);
@@ -158,11 +152,10 @@ impl Widget for &Provisioned {
 struct ProvisionedBundle<'a> {
     bundle: &'a Bundle,
     provisioning: bool,
-    efuses_status: Option<&'a HashMap<String, ProvisioningStatus>>,
 }
 
-impl<'a> ProvisionedBundle<'a> {
-    fn mark_available<'r>(mut row: Row<'r>, status: Option<&ProvisioningStatus>) -> Row<'r> {
+impl ProvisionedBundle<'_> {
+    fn mark_available(mut row: Row<'_>, status: Option<ProvisioningStatus>) -> Row<'_> {
         if let Some(status) = status {
             row = row.bold();
 
@@ -178,9 +171,8 @@ impl<'a> ProvisionedBundle<'a> {
         row
     }
 
-    fn active_string(status: Option<&ProvisioningStatus>) -> String {
+    fn active_string(status: Option<ProvisioningStatus>) -> String {
         if status
-            .as_ref()
             .map(|status| matches!(status, ProvisioningStatus::InProgress(_)))
             .unwrap_or(false)
         {
@@ -191,11 +183,11 @@ impl<'a> ProvisionedBundle<'a> {
         .into()
     }
 
-    fn status_string(status: Option<&ProvisioningStatus>) -> String {
+    fn status_string(status: Option<ProvisioningStatus>) -> String {
         match status {
             Some(ProvisioningStatus::NotStarted) => "Not Started".into(),
             Some(ProvisioningStatus::Pending) => "Pending".into(),
-            Some(ProvisioningStatus::InProgress(progress)) => format!("{}%", *progress).into(),
+            Some(ProvisioningStatus::InProgress(progress)) => format!("{}%", progress),
             Some(ProvisioningStatus::Done) => "Done".into(),
             None => "-".into(),
         }
@@ -222,7 +214,7 @@ impl Widget for &ProvisionedBundle<'_> {
             [
                 Constraint::Min(1),
                 Constraint::Min(1),
-                Constraint::Min((self.bundle.partitions.len() + 1) as _),
+                Constraint::Min((self.bundle.parts_mapping.len() + 1) as _),
                 Constraint::Min(1),
                 Constraint::Min(1),
                 Constraint::Min(3),
@@ -248,38 +240,50 @@ impl Widget for &ProvisionedBundle<'_> {
             .render(layout[1], buf);
 
         Table::new(
-            self.bundle.partitions.iter().map(|partition| {
+            self.bundle.parts_mapping.iter().map(|mapping| {
                 let row = Row::new::<Vec<Cell>>(vec![
-                    ProvisionedBundle::active_string(
-                        partition.image.as_ref().map(|image| &image.status),
-                    )
+                    ProvisionedBundle::active_string(mapping.status()).into(),
+                    mapping.partition.name().into(),
+                    mapping.partition.ty().to_string().into(),
+                    mapping.partition.subtype().to_string().into(),
+                    Text::raw(format!("0x{:06x}", mapping.partition.offset()))
+                        .right_aligned()
+                        .into(),
+                    Text::raw(format!(
+                        "{}KB (0x{:06x})",
+                        mapping.partition.size() / 1024
+                            + if mapping.partition.size() % 1024 > 0 {
+                                1
+                            } else {
+                                0
+                            },
+                        mapping.partition.size()
+                    ))
+                    .right_aligned()
                     .into(),
-                    partition.name.clone().into(),
-                    partition.part_type.as_str().to_string().into(),
-                    partition.part_subtype.clone().into(),
-                    Text::raw(partition.offset_string()).right_aligned().into(),
-                    Text::raw(partition.size_string()).right_aligned().into(),
                     "-".into(),
                     Text::raw(
-                        partition
+                        mapping
                             .image
                             .as_ref()
-                            .map(|image| Partition::any_size_string(image.data.len()))
+                            .map(|image| {
+                                format!(
+                                    "{}KB (0x{:06x})",
+                                    image.data.len() / 1024
+                                        + if image.data.len() % 1024 > 0 { 1 } else { 0 },
+                                    image.data.len()
+                                )
+                            })
                             .unwrap_or("-".to_string()),
                     )
                     .right_aligned()
                     .into(),
-                    Text::raw(ProvisionedBundle::status_string(
-                        partition.image.as_ref().map(|image| &image.status),
-                    ))
-                    .right_aligned()
-                    .into(),
+                    Text::raw(ProvisionedBundle::status_string(mapping.status()))
+                        .right_aligned()
+                        .into(),
                 ]);
 
-                ProvisionedBundle::mark_available(
-                    row,
-                    partition.image.as_ref().map(|image| &image.status),
-                )
+                ProvisionedBundle::mark_available(row, mapping.status())
             }),
             vec![
                 Constraint::Length(1),

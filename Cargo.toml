@@ -15,10 +15,8 @@ futures-lite = "2"
 reqwest = "0.12"
 zip = { version = "2", default-features = false, features = ["deflate", "deflate-flate2"] }
 anyhow = "1"
-csv = "1"
-serde = { version = "1", features = ["derive"] }
-bitflags = "2"
 espflash = "3"
+esp-idf-part = "0.5"
 #esptools = { git = "http://github.com/ivmarkov/esptools" }
 serialport = "4.6"
 log = "0.4"

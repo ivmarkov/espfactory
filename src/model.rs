@@ -6,7 +6,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 
-use crate::bundle::Bundle;
+use crate::bundle::{Bundle, ProvisioningStatus};
 
 extern crate alloc;
 
@@ -27,7 +27,7 @@ impl Model {
     where
         F: FnOnce(&State) -> R,
     {
-        self.state.lock(|state| f(&*state.borrow()))
+        self.state.lock(|state| f(&state.borrow()))
     }
 
     pub fn modify<F>(&self, f: F)
@@ -47,7 +47,7 @@ impl Model {
         self.state.lock(|state| {
             let mut state = state.borrow_mut();
 
-            if f(&mut *state) {
+            if f(&mut state) {
                 self.changed.signal(());
             }
         })
@@ -65,6 +65,12 @@ pub enum State {
     Prepared(Prepared),
     Provisioning(Provisioning),
     Provisioned(Provisioned),
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl State {
@@ -128,14 +134,6 @@ pub struct Empty {}
 #[derive(Debug)]
 pub struct Prepared {
     pub bundle: Bundle,
-}
-
-#[derive(Debug, Clone)]
-pub enum ProvisioningStatus {
-    NotStarted,
-    Pending,
-    InProgress(u8),
-    Done,
 }
 
 #[derive(Debug)]
