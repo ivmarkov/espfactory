@@ -1,18 +1,23 @@
 use std::borrow::Cow;
 use std::fs;
-use std::sync::Arc;
+
+use alloc::sync::Arc;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
+
 use espflash::connection::reset::{ResetAfterOperation, ResetBeforeOperation};
 use espflash::elf::RomSegment;
 use espflash::flasher::{FlashSize, Flasher, ProgressCallbacks};
 use espflash::targets::Chip;
 
 use log::debug;
+
 use serialport::{FlowControl, SerialPortInfo, SerialPortType, UsbPortInfo};
 
 use crate::bundle::FlashData;
+
+extern crate alloc;
 
 pub async fn flash<P>(
     port: &str,
@@ -25,7 +30,7 @@ where
 {
     let finished = Arc::new(Signal::<CriticalSectionRawMutex, ()>::new());
 
-    let flasher_thread = {
+    let handle = {
         let port = port.to_string();
         let finished = finished.clone();
 
@@ -52,9 +57,11 @@ where
         })
     };
 
-    finished.wait().await;
+    let _guard = scopeguard::guard(handle, |handle| {
+        handle.join().unwrap();
+    });
 
-    flasher_thread.join(); // TODO: Join on drop
+    finished.wait().await;
 
     Ok(())
 }
