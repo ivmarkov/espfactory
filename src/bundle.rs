@@ -1,6 +1,12 @@
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+
 use bitflags::bitflags;
 
 use serde::Deserialize;
+
+extern crate alloc;
 
 #[derive(Clone, Debug)]
 pub struct Bundle {
@@ -11,11 +17,11 @@ pub struct Bundle {
     pub efuses: Vec<Efuse>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Image {
     pub file_name: String,
     pub name: String,
-    pub size: usize,
+    pub data: Arc<Vec<u8>>,
 }
 
 impl Image {
@@ -28,15 +34,15 @@ impl Image {
     }
 
     pub fn size_string(&self) -> String {
-        Self::any_size_string(self.size)
+        Self::any_size_string(self.data.len())
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Efuse {
     pub file_name: String,
     pub name: String, // TODO
-    pub size: usize,
+    pub data: Arc<Vec<u8>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize)]

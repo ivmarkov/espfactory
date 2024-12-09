@@ -20,3 +20,5 @@ serde = { version = "1", features = ["derive"] }
 bitflags = "2"
 espflash = "3"
 #esptools = { git = "http://github.com/ivmarkov/esptools" }
+serialport = "4.6"
+log = "0.4"

@@ -2,7 +2,7 @@ use core::cell::RefCell;
 use core::num::Wrapping;
 use std::collections::HashMap;
 
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 
@@ -11,8 +11,8 @@ use crate::bundle::Bundle;
 extern crate alloc;
 
 pub struct Model {
-    state: Mutex<NoopRawMutex, RefCell<State>>,
-    changed: Signal<NoopRawMutex, ()>,
+    state: Mutex<CriticalSectionRawMutex, RefCell<State>>, // TODO: Change to std::sync::Mutex?
+    changed: Signal<CriticalSectionRawMutex, ()>,
 }
 
 impl Model {
@@ -91,7 +91,15 @@ impl State {
         }
     }
 
-    pub fn provisioning(&mut self) -> &mut Provisioning {
+    pub fn provisioning_mut(&mut self) -> &mut Provisioning {
+        if let Self::Provisioning(provisioning) = self {
+            provisioning
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
+    }
+
+    pub fn provisioning(&self) -> &Provisioning {
         if let Self::Provisioning(provisioning) = self {
             provisioning
         } else {
@@ -132,6 +140,7 @@ pub enum ProvisioningStatus {
 #[derive(Debug)]
 pub struct Provisioning {
     pub bundle: Bundle,
+    pub bootloader_status: Option<ProvisioningStatus>,
     pub images_status: HashMap<String, ProvisioningStatus>,
     pub efuses_status: HashMap<String, ProvisioningStatus>,
 }
