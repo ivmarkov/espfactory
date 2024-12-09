@@ -75,7 +75,7 @@ impl State {
         })
     }
 
-    pub fn preparing(&mut self) -> &mut Preparing {
+    pub fn preparing_mut(&mut self) -> &mut Preparing {
         if let Self::Preparing(preparing) = self {
             preparing
         } else {
@@ -83,7 +83,7 @@ impl State {
         }
     }
 
-    pub fn prepared(&mut self) -> &mut Prepared {
+    pub fn prepared_mut(&mut self) -> &mut Prepared {
         if let Self::Prepared(prepared) = self {
             prepared
         } else {
@@ -107,7 +107,7 @@ impl State {
         }
     }
 
-    pub fn provisioned(&mut self) -> &mut Provisioned {
+    pub fn provisioned_mut(&mut self) -> &mut Provisioned {
         if let Self::Provisioned(provisioned) = self {
             provisioned
         } else {
@@ -145,4 +145,6 @@ pub struct Provisioning {
 }
 
 #[derive(Debug)]
-pub struct Provisioned {}
+pub struct Provisioned {
+    pub bundle: Bundle,
+}

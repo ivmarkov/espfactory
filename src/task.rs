@@ -85,7 +85,7 @@ where
             .to_string(); // TODO
 
         self.model.modify(|state| {
-            state.preparing().status = format!("Processing bundle {bundle_name}");
+            state.preparing_mut().status = format!("Processing bundle {bundle_name}");
         });
 
         let mut zip = ZipArchive::new(File::open(bundle_path)?)?;
@@ -203,7 +203,7 @@ where
     async fn load_bundle(&mut self) -> anyhow::Result<PathBuf> {
         let bundle = loop {
             self.model.modify(|state| {
-                state.preparing().status = "Checking".into();
+                state.preparing_mut().status = "Checking".into();
             });
 
             let loaded_path = self.bundle_dir.join("loaded");
@@ -222,7 +222,7 @@ where
             }
 
             self.model.modify(|state| {
-                state.preparing().status = "Fetching".into();
+                state.preparing_mut().status = "Fetching".into();
             });
 
             let scratch_path = self.bundle_dir.join("scratch").join("bundle");
@@ -251,7 +251,7 @@ where
     async fn provision(&mut self) -> anyhow::Result<()> {
         self.model.modify(|state| {
             *state = State::Provisioning(Provisioning {
-                bundle: state.prepared().bundle.clone(),
+                bundle: state.prepared_mut().bundle.clone(),
                 efuses_status: Default::default(),
             });
 
@@ -319,7 +319,7 @@ impl UnprocessedPartition {
         Ok(Partition {
             name: self.name.clone(),
             part_type: PartitionType::App, // self.part_type.parse()?,
-            part_subtype: self.part_subtype.clone(),
+            part_subtype: self.part_subtype.trim().to_string(),
             offset: Self::offset(&self.offset).unwrap_or(offset),
             size: Self::size(&self.size),
             flags: PartitionFlags::ENCRYPTED, //self.flags,
@@ -406,6 +406,24 @@ impl ProgressCallbacks for FlashProgress {
     }
 
     fn finish(&mut self) {
+        if let Some(image) = self.image.lock().unwrap().as_ref() {
+            self.model.modify(|state| {
+                let ps = state.provisioning_mut();
+
+                let partition = ps
+                    .bundle
+                    .partitions
+                    .iter_mut()
+                    .find(|partition| partition.name == image.0);
+
+                if let Some(partition) = partition {
+                    if let Some(imaged) = partition.image.as_mut() {
+                        imaged.status = ProvisioningStatus::Done;
+                    }
+                }
+            });
+        }
+
         *self.image.lock().unwrap() = None;
     }
 }

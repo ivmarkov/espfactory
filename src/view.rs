@@ -219,9 +219,10 @@ impl Widget for &ProvisionedBundle<'_> {
                     )
                     .right_aligned()
                     .into(),
-                    ProvisionedBundle::status_string(
+                    Text::raw(ProvisionedBundle::status_string(
                         partition.image.as_ref().map(|image| &image.status),
-                    )
+                    ))
+                    .right_aligned()
                     .into(),
                 ]);
 
