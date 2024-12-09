@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  schedule:
+    - cron: '50 4 * * *'
+  workflow_dispatch:
+
+env:
+  rust_toolchain: stable
+
+jobs:
+  compile:
+    name: Compile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup | Checkout
+        uses: actions/checkout@v2
+      - name: Setup | Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.rust_toolchain }}
+          components: rustfmt, clippy
+      - name: Setup | Std
+        run: rustup component add rust-src --toolchain ${{ env.rust_toolchain }}-x86_64-unknown-linux-gnu
+      - name: Setup | Set default toolchain
+        run: rustup default ${{ env.rust_toolchain }}
+      - name: Build | Fmt Check
+        run: cargo fmt -- --check
+      - name: Build | Clippy
+        run: cargo clippy --examples --no-deps -- -Dwarnings
+      - name: Build | Default
+        run: cargo build
+      - name: Build | Non-default
+        run: cargo build --no-default-features
+      - name: Build | Test
+        run: cargo test
+#      - name: Build | Examples
+#        run: cargo build --examples
