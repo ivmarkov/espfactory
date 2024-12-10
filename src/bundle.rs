@@ -212,19 +212,23 @@ pub enum Chip {
 
 impl Chip {
     pub const fn boot_addr(&self) -> u32 {
-        0 // TODO
+        match self {
+            Self::Esp32 | Self::Esp32s2 => 0x1000,
+            Self::Esp32p4 => 0x2000,
+            _ => 0x0,
+        }
     }
 
     pub fn to_flash_chip(self) -> espflash::targets::Chip {
         match self {
-            Chip::Esp32 => espflash::targets::Chip::Esp32,
-            Chip::Esp32c2 => espflash::targets::Chip::Esp32c2,
-            Chip::Esp32c3 => espflash::targets::Chip::Esp32c3,
-            Chip::Esp32c6 => espflash::targets::Chip::Esp32c6,
-            Chip::Esp32h2 => espflash::targets::Chip::Esp32h2,
-            Chip::Esp32p4 => espflash::targets::Chip::Esp32p4,
-            Chip::Esp32s2 => espflash::targets::Chip::Esp32s2,
-            Chip::Esp32s3 => espflash::targets::Chip::Esp32s3,
+            Self::Esp32 => espflash::targets::Chip::Esp32,
+            Self::Esp32c2 => espflash::targets::Chip::Esp32c2,
+            Self::Esp32c3 => espflash::targets::Chip::Esp32c3,
+            Self::Esp32c6 => espflash::targets::Chip::Esp32c6,
+            Self::Esp32h2 => espflash::targets::Chip::Esp32h2,
+            Self::Esp32p4 => espflash::targets::Chip::Esp32p4,
+            Self::Esp32s2 => espflash::targets::Chip::Esp32s2,
+            Self::Esp32s3 => espflash::targets::Chip::Esp32s3,
         }
     }
 }
