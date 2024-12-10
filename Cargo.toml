@@ -17,6 +17,7 @@ name = "espfactory"
 required-features = ["bin"]
 
 [features]
+default = ["bin"]
 bin = ["directories"]
 
 [dependencies]

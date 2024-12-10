@@ -41,7 +41,7 @@ impl Model {
         });
     }
 
-    fn maybe_modify<F>(&self, f: F)
+    pub fn maybe_modify<F>(&self, f: F)
     where
         F: FnOnce(&mut State) -> bool,
     {

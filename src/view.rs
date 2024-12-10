@@ -244,8 +244,22 @@ impl Widget for &ProvisionedBundle<'_> {
                 let row = Row::new::<Vec<Cell>>(vec![
                     ProvisionedBundle::active_string(mapping.status()).into(),
                     mapping.partition.name().into(),
-                    mapping.partition.ty().to_string().into(),
-                    mapping.partition.subtype().to_string().into(),
+                    if matches!(
+                        mapping.partition.name().as_str(),
+                        Bundle::BOOTLOADER_NAME | Bundle::PART_TABLE_NAME
+                    ) {
+                        "".into()
+                    } else {
+                        mapping.partition.ty().to_string().into()
+                    },
+                    if matches!(
+                        mapping.partition.name().as_str(),
+                        Bundle::BOOTLOADER_NAME | Bundle::PART_TABLE_NAME
+                    ) {
+                        "".into()
+                    } else {
+                        mapping.partition.subtype().to_string().into()
+                    },
                     Text::raw(format!("0x{:06x}", mapping.partition.offset()))
                         .right_aligned()
                         .into(),

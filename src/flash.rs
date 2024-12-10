@@ -1,16 +1,20 @@
 use core::cell::RefCell;
 
 use std::fs;
+use std::io::Write;
 
 use alloc::borrow::Cow;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 
 use espflash::connection::reset::{ResetAfterOperation, ResetBeforeOperation};
-use espflash::elf::RomSegment;
-use espflash::flasher::{FlashSize, Flasher, ProgressCallbacks};
+use espflash::elf::{ElfFirmwareImage, RomSegment};
+use espflash::flasher::{FlashSettings, FlashSize, Flasher, ProgressCallbacks};
+use espflash::image_format::IdfBootloaderFormat;
+use espflash::targets::XtalFrequency;
 
 use log::{debug, error};
 
@@ -19,6 +23,38 @@ use serialport::{FlowControl, SerialPortInfo, SerialPortType, UsbPortInfo};
 use crate::bundle::{Chip, FlashData};
 
 extern crate alloc;
+
+pub fn default_bootloader(chip: Chip) -> anyhow::Result<Vec<u8>> {
+    let elf_data: &[u8] = &[];
+
+    let image = ElfFirmwareImage::try_from(elf_data)?;
+
+    let image = bootloader_format(&image, chip)?;
+
+    let mut file = Vec::new();
+
+    file.write_all(&image.flash_segments().next().unwrap().data)?;
+
+    Ok(file)
+}
+
+pub fn elf2bin(elf_data: &[u8], chip: Chip) -> anyhow::Result<Vec<u8>> {
+    let image = ElfFirmwareImage::try_from(elf_data)?;
+
+    let image = bootloader_format(&image, chip)?;
+
+    let mut file = Vec::new();
+
+    for segment in image.ota_segments() {
+        if file.is_empty() {
+            file.write_all(&segment.data)?;
+        } else {
+            unreachable!("Multiple segments in an App image found");
+        }
+    }
+
+    Ok(file)
+}
 
 pub async fn flash<P>(
     port: &str,
@@ -46,7 +82,7 @@ where
             let segments = flash_data
                 .iter()
                 .map(|data| RomSegment {
-                    addr: data.offsert,
+                    addr: data.offset,
                     data: Cow::Borrowed(data.data.as_ref()),
                 })
                 .collect::<Vec<_>>();
@@ -116,6 +152,28 @@ fn new(port: &str, chip: Chip) -> anyhow::Result<Flasher> {
     )?;
 
     Ok(flasher)
+}
+
+fn bootloader_format<'a>(
+    image: &'a ElfFirmwareImage,
+    chip: Chip,
+) -> anyhow::Result<IdfBootloaderFormat<'a>> {
+    let chip = chip.to_flash_chip();
+
+    // TODO
+    let flash_data =
+        espflash::flasher::FlashData::new(None, None, None, None, FlashSettings::default(), 0)?;
+
+    // To get a chip revision, the connection is needed
+    // For simplicity, the revision None is used
+    let image = chip.into_target().get_flash_image(
+        image,
+        flash_data.clone(),
+        None,
+        XtalFrequency::default(chip),
+    )?;
+
+    Ok(image)
 }
 
 /// Return the information of a serial port taking into account the different

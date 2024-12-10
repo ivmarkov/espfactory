@@ -102,7 +102,7 @@ where
 
         let mut zip = ZipArchive::new(File::open(bundle_path)?)?;
 
-        let bundle = Bundle::create(bundle_name, &mut zip)?;
+        let bundle = Bundle::from_zip_bundle(bundle_name, &mut zip)?;
 
         self.model
             .modify(move |state| *state = State::Prepared(Prepared { bundle }));
@@ -238,32 +238,32 @@ impl ProgressCallbacks for FlashProgress {
     fn init(&mut self, addr: u32, total: usize) {
         *self.image.lock().unwrap() = Some((addr, total));
 
-        self.model.modify(|state| {
+        self.model.maybe_modify(|state| {
             state
                 .provisioning_mut()
                 .bundle
-                .set_status(addr, ProvisioningStatus::InProgress(0));
+                .set_status(addr, ProvisioningStatus::InProgress(0))
         });
     }
 
     fn update(&mut self, current: usize) {
         if let Some((addr, total)) = *self.image.lock().unwrap() {
-            self.model.modify(|state| {
+            self.model.maybe_modify(|state| {
                 state.provisioning_mut().bundle.set_status(
                     addr,
                     ProvisioningStatus::InProgress((current * 100 / total) as u8),
-                );
+                )
             });
         }
     }
 
     fn finish(&mut self) {
         if let Some((addr, _)) = self.image.lock().unwrap().take() {
-            self.model.modify(|state| {
+            self.model.maybe_modify(|state| {
                 state
                     .provisioning_mut()
                     .bundle
-                    .set_status(addr, ProvisioningStatus::Done);
+                    .set_status(addr, ProvisioningStatus::Done)
             });
         }
     }
