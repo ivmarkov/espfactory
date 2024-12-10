@@ -9,6 +9,9 @@ use alloc::vec::Vec;
 
 use esp_idf_part::{Partition, SubType, Type};
 
+use espflash::flasher::FlashSize;
+use serde::Deserialize;
+
 use zip::ZipArchive;
 
 extern crate alloc;
@@ -16,6 +19,7 @@ extern crate alloc;
 #[derive(Clone, Debug)]
 pub struct Bundle {
     pub name: String,
+    pub params: Params,
     pub parts_mapping: Vec<PartitionMapping>,
     pub efuse_mapping: Vec<Efuse>,
 }
@@ -24,6 +28,7 @@ impl Bundle {
     pub const BOOTLOADER_NAME: &str = "(bootloader)";
     pub const PART_TABLE_NAME: &str = "(part-table)";
 
+    const PARAMS_FILE_NAME: &str = "params.toml";
     const BOOTLOADER_FILE_NAME: &str = "bootloader";
     const PART_TABLE_FILE_NAME: &str = "partition-table.csv";
 
@@ -36,6 +41,12 @@ impl Bundle {
     where
         T: Read + Seek,
     {
+        let mut params_str = String::new();
+        zip.by_name(Self::PARAMS_FILE_NAME)?
+            .read_to_string(&mut params_str)?;
+
+        let params: Params = toml::from_str(&params_str)?;
+
         let mut part_table_str = String::new();
         zip.by_name(Self::PART_TABLE_FILE_NAME)?
             .read_to_string(&mut part_table_str)?;
@@ -57,7 +68,7 @@ impl Bundle {
 
         let part_table_offset = part_table.partitions()[0].offset() - Self::PART_TABLE_SIZE as u32;
 
-        let bootloader_offset = 0; // TODO: 0x1000 for esp32 and esp32s2
+        let bootloader_offset = params.chip.boot_addr();
         let bootloader_size = part_table_offset - bootloader_offset;
 
         let image_names = zip
@@ -137,6 +148,7 @@ impl Bundle {
 
         Ok(Self {
             name,
+            params,
             parts_mapping,
             efuse_mapping,
         })
@@ -166,6 +178,53 @@ impl Bundle {
                     image.status = status;
                 }
             }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Params {
+    pub chip: Chip,
+    pub flash_size: Option<FlashSize>,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Deserialize)]
+#[non_exhaustive]
+//#[strum(serialize_all = "lowercase")]
+pub enum Chip {
+    /// ESP32
+    Esp32,
+    /// ESP32-C2, ESP8684
+    Esp32c2,
+    /// ESP32-C3, ESP8685
+    Esp32c3,
+    /// ESP32-C6
+    Esp32c6,
+    /// ESP32-H2
+    Esp32h2,
+    /// ESP32-P4
+    Esp32p4,
+    /// ESP32-S2
+    Esp32s2,
+    /// ESP32-S3
+    Esp32s3,
+}
+
+impl Chip {
+    pub const fn boot_addr(&self) -> u32 {
+        0 // TODO
+    }
+
+    pub fn to_flash_chip(self) -> espflash::targets::Chip {
+        match self {
+            Chip::Esp32 => espflash::targets::Chip::Esp32,
+            Chip::Esp32c2 => espflash::targets::Chip::Esp32c2,
+            Chip::Esp32c3 => espflash::targets::Chip::Esp32c3,
+            Chip::Esp32c6 => espflash::targets::Chip::Esp32c6,
+            Chip::Esp32h2 => espflash::targets::Chip::Esp32h2,
+            Chip::Esp32p4 => espflash::targets::Chip::Esp32p4,
+            Chip::Esp32s2 => espflash::targets::Chip::Esp32s2,
+            Chip::Esp32s3 => espflash::targets::Chip::Esp32s3,
         }
     }
 }

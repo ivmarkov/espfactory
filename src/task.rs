@@ -24,6 +24,7 @@ extern crate alloc;
 
 pub struct Task<'a, T> {
     model: Arc<Model>,
+    com_port: Option<&'a str>,
     bundle_dir: &'a Path,
     bundle_loader: T,
 }
@@ -32,9 +33,15 @@ impl<'a, T> Task<'a, T>
 where
     T: BundleLoader,
 {
-    pub fn new(model: Arc<Model>, bundle_dir: &'a Path, bundle_loader: T) -> Self {
+    pub fn new(
+        model: Arc<Model>,
+        com_port: Option<&'a str>,
+        bundle_dir: &'a Path,
+        bundle_loader: T,
+    ) -> Self {
         Self {
             model,
+            com_port,
             bundle_dir,
             bundle_loader,
         }
@@ -163,13 +170,20 @@ where
             ps.bundle.set_status_all(ProvisioningStatus::Pending);
         });
 
-        let flash_data = self
-            .model
-            .get(|state| state.provisioning().bundle.get_flash_data().collect());
+        let (chip, flash_size, flash_data) = self.model.get(|state| {
+            let ps = state.provisioning();
+
+            (
+                ps.bundle.params.chip,
+                ps.bundle.params.flash_size,
+                ps.bundle.get_flash_data().collect(),
+            )
+        });
 
         flash::flash(
-            "/dev/ttyUSB0",
-            Some(espflash::flasher::FlashSize::_8Mb), // TODO: Should be configurable
+            self.com_port.unwrap_or("/dev/ttyUSB0"), // TODO
+            chip,
+            flash_size,
             flash_data,
             FlashProgress::new(self.model.clone()),
         )

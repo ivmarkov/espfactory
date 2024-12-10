@@ -1,8 +1,6 @@
-use std::{
-    fs,
-    io::{self, Write},
-    path::PathBuf,
-};
+use std::fs;
+use std::io::{self, Write};
+use std::path::PathBuf;
 
 pub trait BundleLoader {
     async fn load<W>(&mut self, write: W) -> anyhow::Result<String>

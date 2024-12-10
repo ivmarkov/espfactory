@@ -12,6 +12,13 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 rust-version = "1.83"
 
+[[bin]]
+name = "espfactory"
+required-features = ["bin"]
+
+[features]
+bin = ["directories"]
+
 [dependencies]
 crossterm = "0.28"
 ratatui = "0.29"
@@ -25,7 +32,11 @@ reqwest = "0.12"
 zip = { version = "2", default-features = false, features = ["deflate", "deflate-flate2"] }
 anyhow = "1"
 esp-idf-part = "0.5"
-espflash = "3"
+espflash = { version = "3", features = ["cli"] }
 #esptools = { git = "http://github.com/ivmarkov/esptools" }
 serialport = "4.6"
 log = "0.4"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+env_logger = { version = "0.11", optional = true }
+directories = { version = "3", optional = true }

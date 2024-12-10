@@ -1,48 +1,37 @@
-use std::{path::PathBuf, sync::Arc};
+use serde::Deserialize;
 
-use embassy_futures::select::select;
+use espfactory::DirLoader;
 
-use input::Input;
-use loader::DirLoader;
-use ratatui::DefaultTerminal;
+extern crate alloc;
 
-use model::Model;
-use task::Task;
-use utils::futures::Coalesce;
-use view::View;
-
-mod bundle;
-mod flash;
-mod input;
-mod loader;
-mod model;
-mod task;
-mod utils;
-mod view;
-
-fn main() -> anyhow::Result<()> {
-    let mut terminal = ratatui::init();
-
-    let model = Arc::new(Model::new());
-
-    let result = futures_lite::future::block_on(run(model, &mut terminal));
-
-    ratatui::restore();
-
-    result
+#[derive(Deserialize)]
+struct Config {
+    port: Option<String>,
 }
 
-async fn run(model: Arc<Model>, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
-    select(
-        View::new(&model, terminal).run(),
-        // TODO
-        Task::new(
-            model.clone(),
-            &PathBuf::from("scratch/bundles"),
-            DirLoader::new(PathBuf::from("scratch/bundles")),
-        )
-        .run(&mut Input::new(&model)),
-    )
-    .coalesce()
-    .await
+impl Default for Config {
+    fn default() -> Self {
+        Self { port: None }
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    let project_dirs = directories::ProjectDirs::from("org", "ivmarkov", "espfactory")
+        .ok_or_else(|| anyhow::anyhow!("Cannot mount project directories"))?;
+
+    let conf_path = project_dirs.config_dir().join("config.toml");
+    let conf = if conf_path.exists() {
+        let mut conf_str = String::new();
+        std::fs::read_to_string(&mut conf_str)?;
+
+        toml::from_str(&conf_str)?
+    } else {
+        Config::default()
+    };
+
+    let bundle_dir = &project_dirs.cache_dir().join("bundle");
+
+    let loader = DirLoader::new(project_dirs.cache_dir().join("bundles") /*TODO*/);
+
+    futures_lite::future::block_on(espfactory::run(conf.port, bundle_dir, loader))
 }

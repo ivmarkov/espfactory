@@ -1,6 +1,8 @@
-use std::borrow::Cow;
+use core::cell::RefCell;
+
 use std::fs;
 
+use alloc::borrow::Cow;
 use alloc::sync::Arc;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -9,18 +11,18 @@ use embassy_sync::signal::Signal;
 use espflash::connection::reset::{ResetAfterOperation, ResetBeforeOperation};
 use espflash::elf::RomSegment;
 use espflash::flasher::{FlashSize, Flasher, ProgressCallbacks};
-use espflash::targets::Chip;
 
-use log::debug;
+use log::{debug, error};
 
 use serialport::{FlowControl, SerialPortInfo, SerialPortType, UsbPortInfo};
 
-use crate::bundle::FlashData;
+use crate::bundle::{Chip, FlashData};
 
 extern crate alloc;
 
 pub async fn flash<P>(
     port: &str,
+    chip: Chip,
     flash_size: Option<FlashSize>,
     flash_data: Vec<FlashData>,
     mut progress: P,
@@ -35,7 +37,7 @@ where
         let finished = finished.clone();
 
         std::thread::spawn(move || {
-            let mut flasher = new(&port).unwrap();
+            let mut flasher = new(&port, chip)?;
 
             if let Some(flash_size) = flash_size {
                 flasher.set_flash_size(flash_size);
@@ -49,24 +51,35 @@ where
                 })
                 .collect::<Vec<_>>();
 
-            flasher
-                .write_bins_to_flash(&segments, Some(&mut progress))
-                .unwrap();
+            flasher.write_bins_to_flash(&segments, Some(&mut progress))?;
 
             finished.signal(());
+
+            Ok::<_, anyhow::Error>(())
         })
     };
 
-    let _guard = scopeguard::guard(handle, |handle| {
-        handle.join().unwrap();
+    let handle = RefCell::new(Some(handle));
+
+    let _guard = scopeguard::guard(&handle, |handle| {
+        if let Some(handle) = handle.borrow_mut().take() {
+            match handle.join().unwrap() {
+                Ok(()) => {}
+                Err(err) => {
+                    error!("Flashing returned an error: {err}");
+                }
+            }
+        }
     });
 
     finished.wait().await;
 
-    Ok(())
+    let handle = handle.borrow_mut().take().unwrap();
+
+    handle.join().unwrap()
 }
 
-fn new(port: &str) -> anyhow::Result<Flasher> {
+fn new(port: &str, chip: Chip) -> anyhow::Result<Flasher> {
     let port_info = get_serial_port_info(port)?;
 
     let serial_port = serialport::new(port_info.port_name, 112500)
@@ -97,7 +110,7 @@ fn new(port: &str) -> anyhow::Result<Flasher> {
         true,
         true,
         false,
-        Some(Chip::Esp32s3), // TODO
+        Some(chip.to_flash_chip()),
         ResetAfterOperation::default(),
         ResetBeforeOperation::default(),
     )?;
