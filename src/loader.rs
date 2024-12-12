@@ -1,6 +1,7 @@
 use std::io::Write;
 
 pub mod dir;
+pub mod http;
 pub mod s3;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]

@@ -29,7 +29,6 @@ embassy-futures = "0.1"
 critical-section = { version = "1", features = ["std"] }
 scopeguard = "1"
 futures-lite = "2"
-reqwest = "0.12"
 zip = { version = "2", default-features = false, features = ["deflate", "deflate-flate2"] }
 anyhow = "1"
 esp-idf-part = "0.5"
@@ -41,5 +40,6 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 env_logger = { version = "0.11", optional = true }
 directories = { version = "3", optional = true }
+reqwest = "0.12"
 aws-config = { version = "1.1", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1.65"
