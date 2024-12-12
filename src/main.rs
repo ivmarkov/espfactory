@@ -1,4 +1,5 @@
-use espfactory::{Config, DirLoader};
+use espfactory::loader::dir::DirLoader;
+use espfactory::Config;
 
 extern crate alloc;
 

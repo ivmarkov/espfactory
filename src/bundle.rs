@@ -16,6 +16,7 @@ use serde::Deserialize;
 use zip::ZipArchive;
 
 use crate::flash;
+use crate::loader::BundleType;
 
 extern crate alloc;
 
@@ -62,6 +63,39 @@ nvs_bm,   data, 0x06,            ,   32K,
 otadata,  data, ota,             ,    8K,
 extra_1,  data, 0x06,            ,   20K,
 "#;
+
+    pub fn create<R>(
+        name: String,
+        default_params: Params,
+        mut bundle_image: R,
+    ) -> anyhow::Result<Self>
+    where
+        R: Read + Seek,
+    {
+        let bundle_type = BundleType::iter()
+            .find(|&bundle_type| name.ends_with(bundle_type.suffix()))
+            .ok_or_else(|| {
+                anyhow::anyhow!("Bundle name '{}' does not end with a known suffix", name)
+            })?;
+
+        match bundle_type {
+            BundleType::Complete => {
+                Self::from_zip_bundle(name, &mut ZipArchive::new(bundle_image)?)
+            }
+            BundleType::BinAppImage => {
+                let mut bytes = Vec::new();
+                bundle_image.read_to_end(&mut bytes)?;
+
+                Self::from_bin_app_image(name, default_params, &bytes)
+            }
+            BundleType::ElfAppImage => {
+                let mut bytes = Vec::new();
+                bundle_image.read_to_end(&mut bytes)?;
+
+                Self::from_elf_app_image(name, default_params, &bytes)
+            }
+        }
+    }
 
     pub fn from_elf_app_image(
         name: String,
@@ -325,6 +359,21 @@ pub struct Params {
     pub chip: Chip,
     /// Flash size of the target device
     pub flash_size: Option<FlashSize>,
+}
+
+impl Params {
+    pub const fn new() -> Self {
+        Self {
+            chip: Chip::Esp32,
+            flash_size: None,
+        }
+    }
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Deserialize)]

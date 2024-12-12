@@ -13,14 +13,12 @@ use task::Task;
 use utils::futures::Coalesce;
 use view::View;
 
-pub use loader::*;
-
 extern crate alloc;
 
 mod bundle;
 mod flash;
 mod input;
-mod loader;
+pub mod loader;
 mod model;
 mod task;
 mod utils;
@@ -61,7 +59,7 @@ impl Default for Config {
 
 pub async fn run<T>(conf: &Config, bundle_dir: &Path, loader: T) -> anyhow::Result<()>
 where
-    T: BundleLoader,
+    T: loader::BundleLoader,
 {
     let mut terminal = ratatui::init();
 

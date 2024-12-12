@@ -11,14 +11,13 @@ use embassy_time::{Duration, Ticker};
 
 use espflash::flasher::ProgressCallbacks;
 
-use zip::ZipArchive;
-
-use crate::bundle::{Bundle, ProvisioningStatus};
+use crate::bundle::{Bundle, Params, ProvisioningStatus};
+use crate::flash;
 use crate::input::Input;
 use crate::loader::BundleLoader;
 use crate::model::{Model, Prepared, Preparing, Provisioned, Provisioning, Readouts, State};
 use crate::utils::futures::{Coalesce, IntoFallibleFuture};
-use crate::{flash, BundleIdentification, Config};
+use crate::{BundleIdentification, Config};
 
 extern crate alloc;
 
@@ -206,10 +205,9 @@ where
             state.preparing_mut().status = format!("Processing {bundle_name}");
         });
 
-        // TODO: Support the others too
-        let mut zip = ZipArchive::new(File::open(bundle_path)?)?;
+        let mut bundle_file = File::open(bundle_path)?;
 
-        let bundle = Bundle::from_zip_bundle(bundle_name, &mut zip)?;
+        let bundle = Bundle::create(bundle_name, Params::default(), &mut bundle_file)?;
 
         self.model
             .modify(move |state| *state = State::Prepared(Prepared { bundle }));
