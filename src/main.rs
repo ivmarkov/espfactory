@@ -1,19 +1,6 @@
-use serde::Deserialize;
-
-use espfactory::DirLoader;
+use espfactory::{Config, DirLoader};
 
 extern crate alloc;
-
-#[derive(Deserialize)]
-struct Config {
-    port: Option<String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self { port: None }
-    }
-}
 
 fn main() -> anyhow::Result<()> {
     let project_dirs = directories::ProjectDirs::from("org", "ivmarkov", "espfactory")
@@ -26,12 +13,18 @@ fn main() -> anyhow::Result<()> {
 
         toml::from_str(&conf_str)?
     } else {
-        Config::default()
+        Config {
+            port: None,
+            bundle_identification: espfactory::BundleIdentification::BoxId,
+            test_jig_id_readout: true,
+            pcb_id_readout: true,
+            box_id_readout: true,
+        }
     };
 
     let bundle_dir = &project_dirs.cache_dir().join("bundle");
 
     let loader = DirLoader::new(project_dirs.cache_dir().join("bundles") /*TODO*/);
 
-    futures_lite::future::block_on(espfactory::run(conf.port, bundle_dir, loader))
+    futures_lite::future::block_on(espfactory::run(&conf, bundle_dir, loader))
 }

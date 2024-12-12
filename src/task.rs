@@ -14,17 +14,17 @@ use espflash::flasher::ProgressCallbacks;
 use zip::ZipArchive;
 
 use crate::bundle::{Bundle, ProvisioningStatus};
-use crate::flash;
 use crate::input::Input;
 use crate::loader::BundleLoader;
-use crate::model::{Model, Prepared, Preparing, Provisioned, Provisioning, State};
+use crate::model::{Model, Prepared, Preparing, Provisioned, Provisioning, Readouts, State};
 use crate::utils::futures::{Coalesce, IntoFallibleFuture};
+use crate::{flash, BundleIdentification, Config};
 
 extern crate alloc;
 
 pub struct Task<'a, T> {
     model: Arc<Model>,
-    com_port: Option<&'a str>,
+    conf: &'a Config,
     bundle_dir: &'a Path,
     bundle_loader: T,
 }
@@ -35,13 +35,13 @@ where
 {
     pub fn new(
         model: Arc<Model>,
-        com_port: Option<&'a str>,
+        conf: &'a Config,
         bundle_dir: &'a Path,
         bundle_loader: T,
     ) -> Self {
         Self {
             model,
-            com_port,
+            conf,
             bundle_dir,
             bundle_loader,
         }
@@ -49,7 +49,7 @@ where
 
     pub async fn run(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         loop {
-            self.model.modify(|state| *state = State::new());
+            self.readout(input).await?;
 
             self.prepare(input).await?;
 
@@ -67,8 +67,114 @@ where
         Ok(())
     }
 
+    async fn readout(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
+        let init = |readouts: &mut Readouts| {
+            readouts.readouts.clear();
+            readouts.active = 0;
+
+            if self.conf.test_jig_id_readout {
+                readouts
+                    .readouts
+                    .push(("Test JIG ID".to_string(), "".to_string()));
+            }
+
+            if self.conf.pcb_id_readout {
+                readouts
+                    .readouts
+                    .push(("PCB ID".to_string(), "".to_string()));
+            }
+
+            if self.conf.box_id_readout {
+                readouts
+                    .readouts
+                    .push(("Box ID".to_string(), "".to_string()));
+            }
+        };
+
+        self.model.modify(|state| init(state.readouts_mut()));
+
+        while !self.model.get(|state| state.readouts().is_ready()) {
+            let key = input.get().await?;
+
+            self.model.maybe_modify(|state| {
+                let readouts = state.readouts_mut();
+
+                let readout = &mut readouts.readouts[readouts.active].1;
+
+                match key {
+                    KeyCode::Enter => {
+                        if !readout.is_empty() {
+                            readouts.active += 1;
+                            return true;
+                        }
+                    }
+                    KeyCode::Esc => {
+                        init(readouts);
+                        return true;
+                    }
+                    KeyCode::Backspace => {
+                        readout.pop();
+                        return true;
+                    }
+                    KeyCode::Char(ch) => {
+                        readout.push(ch);
+                        return true;
+                    }
+                    _ => (),
+                }
+
+                false
+            });
+        }
+
+        Ok(())
+    }
+
     async fn prepare(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
+        let (_test_jig_id, pcb_id, box_id) = self.model.get(|state| {
+            let readouts = state.readouts();
+            let mut offset = 0;
+
+            let test_jig_id = if self.conf.test_jig_id_readout {
+                let readout = readouts.readouts[offset].1.clone();
+
+                offset += 1;
+
+                Some(readout)
+            } else {
+                None
+            };
+
+            let pcb_id = if self.conf.pcb_id_readout {
+                let readout = readouts.readouts[offset].1.clone();
+
+                offset += 1;
+
+                Some(readout)
+            } else {
+                None
+            };
+
+            let box_id = if self.conf.box_id_readout {
+                let readout = readouts.readouts[offset].1.clone();
+                Some(readout)
+            } else {
+                None
+            };
+
+            (test_jig_id, pcb_id, box_id)
+        });
+
+        self.model
+            .modify(|state| *state = State::Preparing(Preparing::new()));
+
         let model = self.model.clone();
+
+        let bundle_id = match self.conf.bundle_identification {
+            BundleIdentification::None => None,
+            BundleIdentification::PcbId => pcb_id,
+            BundleIdentification::BoxId => box_id,
+        };
 
         select3(
             Self::tick(Duration::from_millis(100), || {
@@ -80,14 +186,14 @@ where
             })
             .into_fallible(),
             input.wait_quit(),
-            self.prep_bundle(),
+            self.prep_bundle(bundle_id.as_deref()),
         )
         .coalesce()
         .await
     }
 
-    async fn prep_bundle(&mut self) -> anyhow::Result<()> {
-        let bundle_path = self.load_bundle().await?;
+    async fn prep_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<()> {
+        let bundle_path = self.load_bundle(bundle_id).await?;
 
         let bundle_name = bundle_path
             .file_name()
@@ -97,9 +203,10 @@ where
             .to_string(); // TODO
 
         self.model.modify(|state| {
-            state.preparing_mut().status = format!("Processing bundle {bundle_name}");
+            state.preparing_mut().status = format!("Processing {bundle_name}");
         });
 
+        // TODO: Support the others too
         let mut zip = ZipArchive::new(File::open(bundle_path)?)?;
 
         let bundle = Bundle::from_zip_bundle(bundle_name, &mut zip)?;
@@ -110,7 +217,7 @@ where
         Ok(())
     }
 
-    async fn load_bundle(&mut self) -> anyhow::Result<PathBuf> {
+    async fn load_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<PathBuf> {
         let bundle = loop {
             self.model.modify(|state| {
                 state.preparing_mut().status = "Checking".into();
@@ -141,7 +248,7 @@ where
             let bundle_name = {
                 let mut scratch_file = File::create(&scratch_path)?;
 
-                let result = self.bundle_loader.load(&mut scratch_file).await;
+                let result = self.bundle_loader.load(&mut scratch_file, bundle_id).await;
 
                 match result {
                     Ok(bundle_name) => bundle_name,
@@ -181,7 +288,7 @@ where
         });
 
         flash::flash(
-            self.com_port.unwrap_or("/dev/ttyUSB0"), // TODO
+            self.conf.port.as_deref().unwrap_or("/dev/ttyUSB0"), // TODO
             chip,
             flash_size,
             flash_data,

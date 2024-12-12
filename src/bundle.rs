@@ -321,7 +321,9 @@ extra_1,  data, 0x06,            ,   20K,
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Params {
+    /// Chip type to be flashed
     pub chip: Chip,
+    /// Flash size of the target device
     pub flash_size: Option<FlashSize>,
 }
 

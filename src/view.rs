@@ -1,3 +1,5 @@
+use core::cmp::Ordering;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::Stylize;
@@ -6,7 +8,9 @@ use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Widget};
 use ratatui::DefaultTerminal;
 
 use crate::bundle::{Bundle, ProvisioningStatus};
-use crate::model::{Empty, Model, Prepared, Preparing, Provisioned, Provisioning, State};
+use crate::model::{
+    Model, Prepared, Preparing, PreparingFailed, Provisioned, Provisioning, Readouts, State,
+};
 
 pub struct View<'a, 'b> {
     model: &'a Model,
@@ -33,12 +37,68 @@ impl<'a, 'b> View<'a, 'b> {
 impl Widget for &State {
     fn render(self, area: Rect, buf: &mut Buffer) {
         match self {
+            State::Readouts(readouts) => readouts.render(area, buf),
             State::Preparing(searching) => searching.render(area, buf),
-            State::Empty(empty) => empty.render(area, buf),
+            State::PreparingFailed(empty) => empty.render(area, buf),
             State::Prepared(loaded) => loaded.render(area, buf),
             State::Provisioning(provisioning) => provisioning.render(area, buf),
             State::Provisioned(ready) => ready.render(area, buf),
         }
+    }
+}
+
+impl Widget for &Readouts {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        main_block(Line::from(vec![
+            "Readout ".into(),
+            "<chars> + <Enter> ".into(),
+            "Reset ".into(),
+            "<Esc> ".bold(),
+        ]))
+        .render(area, buf);
+
+        let layout = Layout::new(
+            Direction::Vertical,
+            [
+                Constraint::Min(1),
+                Constraint::Min(4),
+                Constraint::Length(100),
+            ],
+        )
+        .split(area.inner(Margin::new(2, 2)));
+
+        Paragraph::new("== Readouts").bold().render(layout[0], buf);
+
+        Table::new(
+            self.readouts
+                .iter()
+                .enumerate()
+                .map(|(index, (name, value))| {
+                    let mut row = Row::new::<Vec<Cell>>(vec![
+                        if index == self.active { " >" } else { "" }.into(),
+                        name.as_str().into(),
+                        match self.active.cmp(&index) {
+                            Ordering::Less => "(empty)".into(),
+                            Ordering::Equal => format!("{}_", value.as_str()).into(),
+                            Ordering::Greater => value.as_str().into(),
+                        },
+                    ]);
+
+                    if index == self.active {
+                        row = row.bold();
+                    }
+
+                    row
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                Constraint::Length(2),
+                Constraint::Percentage(20),
+                Constraint::Percentage(80),
+            ],
+        )
+        .header(Row::new::<Vec<Cell>>(vec!["".into(), "Name".into(), "Value".into()]).gray())
+        .render(layout[1], buf);
     }
 }
 
@@ -65,7 +125,7 @@ impl Widget for &Preparing {
     }
 }
 
-impl Widget for &Empty {
+impl Widget for &PreparingFailed {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let instructions = vec![
             " Re-try ".into(),

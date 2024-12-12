@@ -19,7 +19,7 @@ pub struct Model {
 impl Model {
     pub const fn new() -> Self {
         Self {
-            state: Mutex::new(RefCell::new(State::new())),
+            state: Mutex::new(RefCell::new(State::new(Readouts::new()))),
             changed: Signal::new(),
         }
     }
@@ -61,25 +61,33 @@ impl Model {
 
 #[derive(Debug)]
 pub enum State {
+    Readouts(Readouts),
     Preparing(Preparing),
-    Empty(Empty),
+    PreparingFailed(PreparingFailed),
     Prepared(Prepared),
     Provisioning(Provisioning),
     Provisioned(Provisioned),
 }
 
-impl Default for State {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl State {
-    pub const fn new() -> Self {
-        Self::Preparing(Preparing {
-            status: String::new(),
-            counter: Wrapping(0),
-        })
+    pub const fn new(readouts: Readouts) -> Self {
+        Self::Readouts(readouts)
+    }
+
+    pub fn readouts(&self) -> &Readouts {
+        if let Self::Readouts(readouts) = self {
+            readouts
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
+    }
+
+    pub fn readouts_mut(&mut self) -> &mut Readouts {
+        if let Self::Readouts(readouts) = self {
+            readouts
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
     }
 
     pub fn preparing_mut(&mut self) -> &mut Preparing {
@@ -129,8 +137,48 @@ pub struct Preparing {
     pub counter: Wrapping<usize>,
 }
 
+impl Preparing {
+    pub const fn new() -> Self {
+        Self {
+            status: String::new(),
+            counter: Wrapping(0),
+        }
+    }
+}
+
+impl Default for Preparing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug)]
-pub struct Empty {}
+pub struct Readouts {
+    pub readouts: Vec<(String, String)>,
+    pub active: usize,
+}
+
+impl Default for Readouts {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Readouts {
+    pub const fn new() -> Self {
+        Self {
+            readouts: Vec::new(),
+            active: 0,
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.active == self.readouts.len()
+    }
+}
+
+#[derive(Debug)]
+pub struct PreparingFailed {}
 
 #[derive(Debug)]
 pub struct Prepared {
