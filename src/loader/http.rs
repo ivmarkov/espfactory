@@ -4,6 +4,22 @@ use anyhow::Context;
 
 use super::BundleLoader;
 
+/// A loader that reads bundles from an HTTP(S) server.
+///
+/// The server is expected to respond to either GET or POST requests with the bundle data as follows:
+/// - If the `id` argument is present when calling `load`, then a GET request with a parameter `id` is submitted to the server as follows:
+///   `GET <path-from-url>?id=<id>`
+///   The server should respond with the bundle data if a bundle with the supplied ID is found or with an HTTP error status code
+///   otherwise or with another HTTP error status code if the request failed due to other problems (invalid auth, server error, etc.)
+/// - If the `id` argument is not present when calling `load`, then a POST request is submitted to the server as follows:
+///   `POST <path-from-url>`
+///   The server should respond with the bundle data if a (random/next) bundle is found or with an HTTP error status code otherwise or with another
+///   HTTP error status code if the request failed due to other problems (invalid auth, server error, etc.)
+///   The server might also delete the provided bundle after it has been provided
+///   
+/// In both cases (bundle loading with or without a bundle ID), the server should provide the bundle data in the response body
+/// and the name of the bundle in the `Content-Disposition` header. If the `Content-Disposition` header is not present, then the name of the bundle
+/// is assumed to be the ID of the bundle with the `.bundle` extension, or a random name with the `.bundle` extension if the ID is not present
 #[derive(Debug, Clone)]
 pub struct HttpLoader {
     url: String,
@@ -11,6 +27,13 @@ pub struct HttpLoader {
 }
 
 impl HttpLoader {
+    /// Creates a new `HttpLoader`
+    ///
+    /// # Arguments
+    /// - `url`: The URL of the server to load the bundles from
+    /// - `auth`: An optional authorization token to use when loading the bundles
+    ///           If present, it will be used as the value of the `Authorization` header
+    ///           in the request
     pub const fn new(url: String, auth: Option<String>) -> Self {
         Self { url, auth }
     }

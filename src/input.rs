@@ -10,12 +10,16 @@ use crate::model::Model;
 
 extern crate alloc;
 
+/// A helper for procressing input events from the terminal
 pub struct Input<'a> {
     model: &'a Model,
     pump: EventsPump,
 }
 
 impl<'a> Input<'a> {
+    /// Creates a new `Input` instance with the given model
+    ///
+    /// The model is necessary only so that the input can automatically trigger redraws on terminal resize events
     pub fn new(model: &'a Model) -> Self {
         Self {
             model,
@@ -23,6 +27,7 @@ impl<'a> Input<'a> {
         }
     }
 
+    /// Waits for the user to press the `Esc` key swallowing all other key presses
     pub async fn wait_quit(&self) -> anyhow::Result<()> {
         loop {
             if self.get().await? == KeyCode::Esc {
@@ -31,6 +36,7 @@ impl<'a> Input<'a> {
         }
     }
 
+    /// Waits for the user to press the `Esc` key or the given key code swallowing all other key presses
     pub async fn wait_quit_or(&self, code: KeyCode) -> anyhow::Result<bool> {
         loop {
             let got = self.get().await?;
@@ -43,6 +49,7 @@ impl<'a> Input<'a> {
         }
     }
 
+    /// Swallows all key presses
     #[allow(unused)]
     pub async fn swallow(&self) -> anyhow::Result<()> {
         loop {
@@ -50,6 +57,7 @@ impl<'a> Input<'a> {
         }
     }
 
+    /// Gets the next key press event
     pub async fn get(&self) -> anyhow::Result<KeyCode> {
         self.pump.start()?;
 
@@ -68,12 +76,15 @@ impl<'a> Input<'a> {
     }
 }
 
+/// A helper for processing input events from the terminal using async code,
+/// by moving the blocking code that poll for events to a dedicated thread
 struct EventsPump {
     state: Arc<EventsPumpState>,
     thread_join: std::sync::Mutex<Option<std::thread::JoinHandle<anyhow::Result<()>>>>,
 }
 
 impl EventsPump {
+    /// Creates a new `EventsPump` instance
     fn new() -> Self {
         Self {
             state: Arc::new(EventsPumpState::new()),
@@ -81,6 +92,7 @@ impl EventsPump {
         }
     }
 
+    /// Starts the event pump thread if not started yet
     fn start(&self) -> anyhow::Result<()> {
         let mut thread_join = self.thread_join.lock().unwrap();
 
@@ -104,12 +116,18 @@ impl Drop for EventsPump {
     }
 }
 
+/// The state of the event pump
 struct EventsPumpState {
-    event: Channel<CriticalSectionRawMutex, Event, 1>,
+    /// The channel for getting events from the terminal
+    /// Up to 10 events can be buffered
+    event: Channel<CriticalSectionRawMutex, Event, 10>,
+    /// A flag indicating whether the event pump thread should quit
+    /// This flag is used to signal the event pump thread to quit when dropping the `EventsPump` instance
     quit: AtomicBool,
 }
 
 impl EventsPumpState {
+    /// Creates a new `EventsPumpState` instance
     const fn new() -> Self {
         Self {
             event: Channel::new(),
@@ -117,6 +135,7 @@ impl EventsPumpState {
         }
     }
 
+    /// The main event pump loop (to be called from the event pump thread)
     fn pump_loop(&self) -> anyhow::Result<()> {
         while !self.quit.load(Ordering::SeqCst) {
             if event::poll(core::time::Duration::from_millis(100))? {

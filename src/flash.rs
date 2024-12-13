@@ -24,12 +24,20 @@ use crate::bundle::{Chip, FlashData};
 
 extern crate alloc;
 
-pub fn default_bootloader(chip: Chip) -> anyhow::Result<Vec<u8>> {
+/// Return the default bootloader image for the given chip
+///
+/// Arguments:
+/// - `chip` - the chip for which the bootloader image is needed
+/// - `flash_size` - the flash size to be used for the bootloader image
+///   Prior to being returned, the default bootloader image is patched for the given flash size
+///   (bootloader needs to know the flash size as it does some sanity checks on the app partition
+///   before booting it, including whether it fits in the flash)
+pub fn default_bootloader(chip: Chip, flash_size: Option<FlashSize>) -> anyhow::Result<Vec<u8>> {
     let elf_data: &[u8] = &[];
 
     let image = ElfFirmwareImage::try_from(elf_data)?;
 
-    let image = bootloader_format(&image, chip)?;
+    let image = bootloader_format(&image, chip, flash_size)?;
 
     let mut file = Vec::new();
 
@@ -38,10 +46,15 @@ pub fn default_bootloader(chip: Chip) -> anyhow::Result<Vec<u8>> {
     Ok(file)
 }
 
+/// Convert an ELF file to a binary image
+///
+/// Arguments:
+/// - `elf_data` - the ELF file data
+/// - `chip` - the chip for which the binary image is needed
 pub fn elf2bin(elf_data: &[u8], chip: Chip) -> anyhow::Result<Vec<u8>> {
     let image = ElfFirmwareImage::try_from(elf_data)?;
 
-    let image = bootloader_format(&image, chip)?;
+    let image = bootloader_format(&image, chip, None)?;
 
     let mut file = Vec::new();
 
@@ -157,12 +170,16 @@ fn new(port: &str, chip: Chip) -> anyhow::Result<Flasher> {
 fn bootloader_format<'a>(
     image: &'a ElfFirmwareImage,
     chip: Chip,
+    flash_size: Option<FlashSize>,
 ) -> anyhow::Result<IdfBootloaderFormat<'a>> {
     let chip = chip.to_flash_chip();
 
-    // TODO
-    let flash_data =
-        espflash::flasher::FlashData::new(None, None, None, None, FlashSettings::default(), 0)?;
+    let mut flash_settings = FlashSettings::default();
+    if let Some(flash_size) = flash_size {
+        flash_settings.size = Some(flash_size);
+    }
+
+    let flash_data = espflash::flasher::FlashData::new(None, None, None, None, flash_settings, 0)?;
 
     // To get a chip revision, the connection is needed
     // For simplicity, the revision None is used

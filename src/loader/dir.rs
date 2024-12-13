@@ -6,12 +6,21 @@ use anyhow::Context;
 
 use super::BundleLoader;
 
+/// A loader that reads bundles from a directory.
+///
+/// The directory is expected to have a flat structure, containing a bunch of files, where
+/// each file represents a bundle with a unique name and an extension matching one of the ones returned by
+/// `BundleType::suffix()`
+///
+/// If the bundles are loaded by ID, then the bundle name is assumed to be the ID with the corresponding extension
+/// i.e. `<ID>.bundle`, `<ID>.bin`, or `<ID>`
 #[derive(Debug, Clone)]
 pub struct DirLoader {
     path: PathBuf,
 }
 
 impl DirLoader {
+    /// Creates a new `DirLoader` with the given path.
     pub const fn new(path: PathBuf) -> Self {
         Self { path }
     }

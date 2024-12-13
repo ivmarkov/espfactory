@@ -21,6 +21,8 @@ use crate::{BundleIdentification, Config};
 
 extern crate alloc;
 
+/// A task that runs the factory application and represents the lifecycle states of provisioning a bundle
+/// (readouts, preparing, provisioning, etc.)
 pub struct Task<'a, T> {
     model: Arc<Model>,
     conf: &'a Config,
@@ -32,6 +34,15 @@ impl<'a, T> Task<'a, T>
 where
     T: BundleLoader,
 {
+    /// Create a new task
+    ///
+    /// Arguments:
+    /// - `model` - the model (states) of the application
+    ///   Shared between the task, the UI (`View`) and the input processing (`Input`), i.e.
+    ///   the task modifies the model, the UI renders the model and the input processing triggers model changes on terminal resize events (MVC)
+    /// - `conf` - the configuration of the task
+    /// - `bundle_dir` - the directory where the bundles are stored
+    /// - `bundle_loader` - the loader used to load the bundles
     pub fn new(
         model: Arc<Model>,
         conf: &'a Config,
@@ -46,6 +57,16 @@ where
         }
     }
 
+    /// Run the factory bundle provisioning task in a loop as follows:
+    /// - Readouts (read the necessary IDs from the user, e.g. test jig ID, PCB ID, box ID)
+    /// - Load and prepare the (next) bundle to be provisioned, possibly using one of the readouts as a bundle ID
+    ///   by fetching the bundle content using the bundle loader, and then creating a `Bundle` instance
+    /// - Provision the bundle by flashing and optionally efusing the chip with the bundle content
+    /// - Repeat the above steps until the user quits
+    ///
+    /// Arguments:
+    /// - `input` - the input helper to process terminal events
+    ///   Necessary as some states require direct user input (e.g. readouts)
     pub async fn run(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         loop {
             self.readout(input).await?;
@@ -66,6 +87,7 @@ where
         Ok(())
     }
 
+    /// Process the readouts state by reading the necessary IDs from the user
     async fn readout(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         let init = |readouts: &mut Readouts| {
             readouts.readouts.clear();
@@ -129,6 +151,7 @@ where
         Ok(())
     }
 
+    /// Prepare the bundle to be provisioned by loading it from the storage
     async fn prepare(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         let (_test_jig_id, pcb_id, box_id) = self.model.get(|state| {
             let readouts = state.readouts();
@@ -191,30 +214,7 @@ where
         .await
     }
 
-    async fn prep_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<()> {
-        let bundle_path = self.load_bundle(bundle_id).await?;
-
-        let bundle_name = bundle_path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string(); // TODO
-
-        self.model.modify(|state| {
-            state.preparing_mut().status = format!("Processing {bundle_name}");
-        });
-
-        let mut bundle_file = File::open(bundle_path)?;
-
-        let bundle = Bundle::create(bundle_name, Params::default(), &mut bundle_file)?;
-
-        self.model
-            .modify(move |state| *state = State::Prepared(Prepared { bundle }));
-
-        Ok(())
-    }
-
+    /// Load the bundle from the storage of the bundle loader into the scratch directory
     async fn load_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<PathBuf> {
         let bundle = loop {
             self.model.modify(|state| {
@@ -263,6 +263,33 @@ where
         Ok(bundle)
     }
 
+    /// Prepare the bundle to be provisioned by creating a `Bundle` instance from the loaded bundle content
+    /// in the scratch directory
+    async fn prep_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<()> {
+        let bundle_path = self.load_bundle(bundle_id).await?;
+
+        let bundle_name = bundle_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string(); // TODO
+
+        self.model.modify(|state| {
+            state.preparing_mut().status = format!("Processing {bundle_name}");
+        });
+
+        let mut bundle_file = File::open(bundle_path)?;
+
+        let bundle = Bundle::create(bundle_name, Params::default(), &mut bundle_file)?;
+
+        self.model
+            .modify(move |state| *state = State::Prepared(Prepared { bundle }));
+
+        Ok(())
+    }
+
+    /// Provision the bundle by flashing and optionally efusing the chip with the bundle content
     async fn provision(&mut self) -> anyhow::Result<()> {
         self.model.modify(|state| {
             *state = State::Provisioning(Provisioning {
@@ -325,6 +352,7 @@ where
     }
 }
 
+/// A progress callback for flashing the bundle
 struct FlashProgress {
     model: Arc<Model>,
     image: Mutex<Option<(u32, usize)>>,

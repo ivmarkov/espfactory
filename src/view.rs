@@ -12,16 +12,23 @@ use crate::model::{
     Model, Prepared, Preparing, PreparingFailed, Provisioned, Provisioning, Readouts, State,
 };
 
+/// The view (UI) of the application
+///
+/// The UI is interactive, terminal based
 pub struct View<'a, 'b> {
+    /// The model of the application to be rendered in the UI
     model: &'a Model,
+    /// The terminal to render the UI to
     term: &'b mut DefaultTerminal,
 }
 
 impl<'a, 'b> View<'a, 'b> {
+    /// Creates a new `View` instance with the given model and terminal
     pub fn new(model: &'a Model, term: &'b mut DefaultTerminal) -> Self {
         Self { model, term }
     }
 
+    /// Runs the view rendering loop by watching for changes in the model and re-rendering the UI
     pub async fn run(&mut self) -> anyhow::Result<()> {
         loop {
             self.model.get(|state| {
