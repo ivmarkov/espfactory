@@ -303,8 +303,8 @@ extra_1,  data, 0x06,            ,   20K,
             flash::default_bootloader(params.chip, params.flash_size).map(Image::new)
         })?;
 
-        let part_table = esp_idf_part::PartitionTable::try_from_str(part_table_str).unwrap();
-        let part_table_image = Image::new(part_table.to_bin().unwrap());
+        let part_table = esp_idf_part::PartitionTable::try_from_str(part_table_str)?;
+        let part_table_image = Image::new(part_table.to_bin()?);
 
         let part_table_offset = part_table.partitions()[0].offset() - Self::PART_TABLE_SIZE as u32;
 

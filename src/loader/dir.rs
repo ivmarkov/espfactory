@@ -72,6 +72,7 @@ impl BundleLoader for DirLoader {
                 fs::remove_file(&path).context("Removing the bundle failed")?;
             }
 
+            // TODO
             Ok(path.file_name().unwrap().to_str().unwrap().to_string())
         } else {
             anyhow::bail!("No files found in bundles' directory")

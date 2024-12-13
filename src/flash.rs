@@ -41,6 +41,8 @@ pub fn default_bootloader(chip: Chip, flash_size: Option<FlashSize>) -> anyhow::
 
     let mut file = Vec::new();
 
+    // There should always be a bootloader segment and it is always the first one
+    // TODO: Internal `espflash` detail, maybe ask them to expose this in a more user-friendly way
     file.write_all(&image.flash_segments().next().unwrap().data)?;
 
     Ok(file)
@@ -123,6 +125,7 @@ where
 
     finished.wait().await;
 
+    // There should be a thread handle as the guard had not kicked in yet at this point
     let handle = handle.borrow_mut().take().unwrap();
 
     handle.join().unwrap()

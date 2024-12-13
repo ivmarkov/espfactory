@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs::{self, DirEntry, File};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -34,6 +34,9 @@ impl<'a, T> Task<'a, T>
 where
     T: BundleLoader,
 {
+    const BUNDLE_TEMP_DIR_NAME: &'static str = "temp";
+    const BUNDLE_LOADED_DIR_NAME: &'static str = "loaded";
+
     /// Create a new task
     ///
     /// Arguments:
@@ -214,39 +217,47 @@ where
         .await
     }
 
-    /// Load the bundle from the storage of the bundle loader into the scratch directory
+    /// Load the bundle from the storage of the bundle loader into the bundle workspace directory
     async fn load_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<PathBuf> {
         let bundle = loop {
             self.model.modify(|state| {
                 state.preparing_mut().status = "Checking".into();
             });
 
-            let loaded_path = self.bundle_dir.join("loaded");
-            fs::create_dir_all(&loaded_path)?;
+            if bundle_id.is_none() {
+                // - Only preserve the loaded bundle if no bundle ID is provided
+                //   (i.e. a random bundle is to be downloaded, used, and possibly deleted from the server)
+                // - For bundles with a bundle ID, always re-download the bundle using the loader
 
-            let files = fs::read_dir(&loaded_path)?
-                .map(|e| e.unwrap())
-                .collect::<Vec<_>>(); // TODO
+                let loaded_path = self.bundle_dir.join(Self::BUNDLE_LOADED_DIR_NAME);
+                fs::create_dir_all(&loaded_path)?;
 
-            if files.len() > 1 {
-                panic!("TODO");
-            }
+                let files: Result<Vec<DirEntry>, _> = fs::read_dir(&loaded_path)?.collect();
+                let files = files?;
 
-            if files.len() == 1 {
-                break files[0].path();
+                if files.len() > 1 {
+                    anyhow::bail!("More than one bundle found in the bundle workspace directory");
+                }
+
+                if files.len() == 1 {
+                    break files[0].path();
+                }
             }
 
             self.model.modify(|state| {
                 state.preparing_mut().status = "Fetching".into();
             });
 
-            let scratch_path = self.bundle_dir.join("scratch").join("bundle");
-            fs::create_dir_all(scratch_path.parent().unwrap())?;
+            let bundle_temp_path = self
+                .bundle_dir
+                .join(Self::BUNDLE_TEMP_DIR_NAME)
+                .join("bundle");
+            fs::create_dir_all(bundle_temp_path.parent().unwrap())?;
 
             let bundle_name = {
-                let mut scratch_file = File::create(&scratch_path)?;
+                let mut temp_file = File::create(&bundle_temp_path)?;
 
-                let result = self.bundle_loader.load(&mut scratch_file, bundle_id).await;
+                let result = self.bundle_loader.load(&mut temp_file, bundle_id).await;
 
                 match result {
                     Ok(bundle_name) => bundle_name,
@@ -254,17 +265,26 @@ where
                 }
             };
 
-            let bundle_path = self.bundle_dir.join("loaded").join(&bundle_name);
-            fs::create_dir_all(bundle_path.parent().unwrap())?;
+            if bundle_id.is_none() {
+                // Move the loaded random bundle to the loaded path so as not to lose it if the user interrupts the provisioning process
 
-            fs::rename(scratch_path, bundle_path)?;
+                let bundle_loaded_path = self
+                    .bundle_dir
+                    .join(Self::BUNDLE_LOADED_DIR_NAME)
+                    .join(&bundle_name);
+                fs::create_dir_all(bundle_loaded_path.parent().unwrap())?;
+
+                fs::rename(bundle_temp_path, bundle_loaded_path)?;
+            } else {
+                break bundle_temp_path;
+            }
         };
 
         Ok(bundle)
     }
 
     /// Prepare the bundle to be provisioned by creating a `Bundle` instance from the loaded bundle content
-    /// in the scratch directory
+    /// in the bundle workspace directory
     async fn prep_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<()> {
         let bundle_path = self.load_bundle(bundle_id).await?;
 
@@ -321,14 +341,13 @@ where
         )
         .await?;
 
-        let bundle_loaded_dir = self.bundle_dir.join("loaded");
+        let bundle_loaded_dir = self.bundle_dir.join(Self::BUNDLE_LOADED_DIR_NAME);
         fs::create_dir_all(&bundle_loaded_dir)?;
 
-        bundle_loaded_dir.read_dir()?.for_each(|entry| {
-            // TODO
-            let entry = entry.unwrap();
-            fs::remove_file(entry.path()).unwrap();
-        });
+        for entry in bundle_loaded_dir.read_dir()? {
+            let entry = entry?;
+            fs::remove_file(entry.path())?;
+        }
 
         self.model.modify(|state| {
             *state = State::Provisioned(Provisioned {
