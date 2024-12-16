@@ -248,19 +248,28 @@ where
                 state.preparing_mut().status = "Fetching".into();
             });
 
-            let bundle_temp_path = self
+            let mut bundle_temp_path = self
                 .bundle_dir
                 .join(Self::BUNDLE_TEMP_DIR_NAME)
                 .join("bundle");
             fs::create_dir_all(bundle_temp_path.parent().unwrap())?;
 
             let bundle_name = {
-                let mut temp_file = File::create(&bundle_temp_path)?;
+                let result = {
+                    let mut temp_file = File::create(&bundle_temp_path)?;
 
-                let result = self.bundle_loader.load(&mut temp_file, bundle_id).await;
+                    self.bundle_loader.load(&mut temp_file, bundle_id).await
+                };
 
                 match result {
-                    Ok(bundle_name) => bundle_name,
+                    Ok(bundle_name) => {
+                        let bundle_new_temp_path = self.bundle_dir.join(&bundle_name);
+                        fs::rename(&bundle_temp_path, &bundle_new_temp_path)?;
+
+                        bundle_temp_path = bundle_new_temp_path;
+
+                        bundle_name
+                    }
                     Err(err) => Err(err)?,
                 }
             };

@@ -179,7 +179,14 @@ fn main() -> anyhow::Result<()> {
     let conf = if let Some(conf) = args.conf {
         toml::from_str(&std::fs::read_to_string(conf)?)?
     } else {
-        Config::default()
+        Config {
+            port: None,
+            bundle_source: None,
+            bundle_identification: Some(BundleIdentification::BoxId),
+            test_jig_id_readout: Some(true),
+            pcb_id_readout: Some(true),
+            box_id_readout: Some(true),
+        }
     };
 
     let loader = args

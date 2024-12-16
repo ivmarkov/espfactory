@@ -224,12 +224,12 @@ extra_1,  data, 0x06,            ,   20K,
                 let mut data = Vec::new();
                 zip_file.read_to_end(&mut data)?;
 
-                let name = name
+                let name = file_name
                     .strip_prefix(Self::IMAGES_PREFIX)
                     .unwrap()
                     .trim_end_matches(Self::BIN_SUFFIX);
 
-                let elf = file_name.ends_with(Self::BIN_SUFFIX);
+                let elf = !file_name.ends_with(Self::BIN_SUFFIX);
 
                 let image = if elf {
                     Image::new(flash::elf2bin(&data, params.chip)?)
