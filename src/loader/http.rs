@@ -10,10 +10,10 @@ use super::BundleLoader;
 /// - If the `id` argument is present when calling `load`, then a GET request with a parameter `id` is submitted to the server as follows:
 ///   `GET <path-from-url>?id=<id>`
 ///   The server should respond with the bundle data if a bundle with the supplied ID is found or with an HTTP error status code
-///   otherwise or with another HTTP error status code if the request failed due to other problems (invalid auth, server error, etc.)
+///   otherwise; or with another HTTP error status code if the request failed due to other problems (invalid auth, server error, etc.)
 /// - If the `id` argument is not present when calling `load`, then a POST request is submitted to the server as follows:
 ///   `POST <path-from-url>`
-///   The server should respond with the bundle data if a (random/next) bundle is found or with an HTTP error status code otherwise or with another
+///   The server should respond with the bundle data if a (random/next) bundle is found or with an HTTP error status code otherwise; or with another
 ///   HTTP error status code if the request failed due to other problems (invalid auth, server error, etc.)
 ///   The server might also delete the provided bundle after it has been provided
 ///   

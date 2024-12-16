@@ -10,7 +10,7 @@ description = "A utility for flashing/provisioning ESP32 PCBs at the factory pre
 repository = "https://github.com/ivmarkov/espfactory"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-rust-version = "1.83"
+rust-version = "1.82"
 
 [[bin]]
 name = "espfactory"
@@ -18,7 +18,7 @@ required-features = ["bin"]
 
 [features]
 default = ["bin"]
-bin = ["directories"]
+bin = ["directories", "clap"]
 
 [dependencies]
 crossterm = "0.28"
@@ -43,3 +43,4 @@ directories = { version = "3", optional = true }
 reqwest = "0.12"
 aws-config = { version = "1.1", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1.65"
+clap = { version = "4", optional = true, features = ["derive"] }

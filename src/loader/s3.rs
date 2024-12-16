@@ -20,11 +20,28 @@ use super::{BundleLoader, BundleType};
 #[derive(Debug, Clone)]
 pub struct S3Loader {
     bucket: String,
-    prefix_key: Option<String>,
+    prefix: Option<String>,
     delete_after_load: bool,
 }
 
 impl S3Loader {
+    pub fn new_from_path(path: String, delete_after_load: bool) -> Self {
+        let path = path.trim_matches('/');
+        let (bucket, prefix) = if let Some(split) = path.find('/') {
+            let (bucket, prefix) = path.split_at(split);
+
+            (bucket, Some(prefix))
+        } else {
+            (path, None)
+        };
+
+        Self::new(
+            bucket.to_string(),
+            prefix.map(|p| p.to_string()),
+            delete_after_load,
+        )
+    }
+
     /// Creates a new `S3Loader` instance
     ///
     /// # Arguments
@@ -32,10 +49,10 @@ impl S3Loader {
     /// - `prefix_key`: An optional prefix key to use when loading the bundles
     /// - `delete_after_load`: A flag indicating whether the loaded bundle should be deleted from the bucket after loading
     ///   Used only when loading a random bundle (i.e., the `id` argument when calling `load` is not provided)
-    pub const fn new(bucket: String, prefix_key: Option<String>, delete_after_load: bool) -> Self {
+    pub const fn new(bucket: String, prefix: Option<String>, delete_after_load: bool) -> Self {
         Self {
             bucket,
-            prefix_key,
+            prefix,
             delete_after_load,
         }
     }
@@ -53,7 +70,7 @@ impl BundleLoader for S3Loader {
             for bundle_type in BundleType::iter() {
                 let bundle_name = bundle_type.file(id);
                 let key = self
-                    .prefix_key
+                    .prefix
                     .as_deref()
                     .map(|prefix| format!("{}/{}", prefix, bundle_name))
                     .unwrap_or(bundle_name.clone());
@@ -95,7 +112,7 @@ impl BundleLoader for S3Loader {
                     builder = builder.continuation_token(continuation_token);
                 }
 
-                if let Some(prefix) = &self.prefix_key {
+                if let Some(prefix) = &self.prefix {
                     builder = builder.prefix(prefix);
                 }
 

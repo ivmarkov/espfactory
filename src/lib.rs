@@ -25,22 +25,26 @@ mod utils;
 mod view;
 
 /// The configuration of the factory
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     /// The serial port to use for communication with the device
+    ///
     /// If not provided, the first available port where an ESP chip is
     /// detected will be used
     pub port: Option<String>,
     /// The method used to identify the bundle to be loaded
     pub bundle_identification: BundleIdentification,
     /// Whether to render a UI for reading the test jig ID
+    ///
     /// The test jig Id is only read and used for logging purposes
     pub test_jig_id_readout: bool,
     /// Whether to render a UI for reading the PCB ID
+    ///
     /// The PCB ID is used for logging purposes, but also and if the `BundleIdentification::PcbId` is used
     /// it is used to identify the bundle to be loaded
     pub pcb_id_readout: bool,
     /// Whether to render a UI for reading the box ID
+    ///
     /// The box ID is used for logging purposes, but also and if the `BundleIdentification::BoxId` is used
     /// it is used to identify the bundle to be loaded
     pub box_id_readout: bool,
@@ -67,11 +71,12 @@ impl Default for Config {
 }
 
 /// The identification method used to identify a bundle to be loaded.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Deserialize)]
+#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash, Deserialize)]
 pub enum BundleIdentification {
     /// No identification method is used - just load the first bundle found
     /// and - depending on the concrete `BundleLoader` implementation and its configuration -
     /// remove it from the storage.
+    #[default]
     None,
     /// Use the PCB ID as the bundle ID
     PcbId,

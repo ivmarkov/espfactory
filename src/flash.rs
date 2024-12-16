@@ -64,7 +64,7 @@ pub fn elf2bin(elf_data: &[u8], chip: Chip) -> anyhow::Result<Vec<u8>> {
         if file.is_empty() {
             file.write_all(&segment.data)?;
         } else {
-            unreachable!("Multiple segments in an App image found");
+            unreachable!("Found multiple segments in an App image");
         }
     }
 
