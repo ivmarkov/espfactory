@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{ColorChoice, Parser, Subcommand, ValueEnum};
 
 use espfactory::loader::{dir::DirLoader, http::HttpLoader, s3::S3Loader, BundleLoader};
-use espfactory::BundleIdentification;
+use espfactory::{BundleIdentification, LOGGER};
 
 use log::LevelFilter;
 
@@ -170,6 +170,9 @@ impl BundleLoader for Loader {
 
 fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
+
+    log::set_logger(&LOGGER).unwrap();
+    log::set_max_level(LevelFilter::Debug);
 
     // env_logger::builder()
     //     .format(|buf, record| writeln!(buf, "{}", record.args()))

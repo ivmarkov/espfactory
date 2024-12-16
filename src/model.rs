@@ -1,6 +1,8 @@
 use core::cell::RefCell;
 use core::num::Wrapping;
 
+use alloc::sync::Arc;
+
 use std::collections::HashMap;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -17,15 +19,15 @@ pub struct Model {
     state: Mutex<CriticalSectionRawMutex, RefCell<State>>, // TODO: Change to std::sync::Mutex?
     /// A signal to notify that the model has changed
     /// Used to trigger redraws of the UI
-    changed: Signal<CriticalSectionRawMutex, ()>,
+    changed: Arc<Signal<CriticalSectionRawMutex, ()>>,
 }
 
 impl Model {
     /// Create a new model in the initial state (readouts)
-    pub const fn new() -> Self {
+    pub const fn new(changed: Arc<Signal<CriticalSectionRawMutex, ()>>) -> Self {
         Self {
             state: Mutex::new(RefCell::new(State::new(Readouts::new()))),
-            changed: Signal::new(),
+            changed,
         }
     }
 

@@ -6,6 +6,7 @@ use alloc::sync::Arc;
 
 use embassy_futures::select::select;
 
+use embassy_sync::signal::Signal;
 use input::Input;
 use model::Model;
 use serde::Deserialize;
@@ -13,12 +14,15 @@ use task::Task;
 use utils::futures::Coalesce;
 use view::View;
 
+pub use logger::LOGGER;
+
 extern crate alloc;
 
 mod bundle;
 mod flash;
 mod input;
 pub mod loader;
+mod logger;
 mod model;
 mod task;
 mod utils;
@@ -96,7 +100,14 @@ where
 {
     let mut terminal = ratatui::init();
 
-    let model = Arc::new(Model::new());
+    let signal = Arc::new(Signal::new());
+
+    let model = Arc::new(Model::new(signal.clone()));
+
+    LOGGER.lock().swap_signal(Some(signal));
+    let _guard = scopeguard::guard((), |_| {
+        LOGGER.lock().swap_signal(None);
+    });
 
     let result = select(
         View::new(&model, &mut terminal).run(),

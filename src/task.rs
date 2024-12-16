@@ -10,6 +10,7 @@ use embassy_futures::select::select3;
 use embassy_time::{Duration, Ticker};
 
 use espflash::flasher::ProgressCallbacks;
+use log::info;
 
 use crate::bundle::{Bundle, Params, ProvisioningStatus};
 use crate::flash;
@@ -123,25 +124,27 @@ where
             self.model.maybe_modify(|state| {
                 let readouts = state.readouts_mut();
 
-                let readout = &mut readouts.readouts[readouts.active].1;
+                let readout = &mut readouts.readouts[readouts.active];
 
                 match key {
                     KeyCode::Enter => {
-                        if !readout.is_empty() {
+                        if !readout.1.is_empty() {
                             readouts.active += 1;
+                            info!("Readout `{}`: `{}`", readout.0, readout.1);
                             return true;
                         }
                     }
                     KeyCode::Esc => {
                         init(readouts);
+                        info!("Readouts reset");
                         return true;
                     }
                     KeyCode::Backspace => {
-                        readout.pop();
+                        readout.1.pop();
                         return true;
                     }
                     KeyCode::Char(ch) => {
-                        readout.push(ch);
+                        readout.1.push(ch);
                         return true;
                     }
                     _ => (),

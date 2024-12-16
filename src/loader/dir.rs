@@ -83,6 +83,8 @@ impl BundleLoader for DirLoader {
                 fs::remove_file(&path).context("Removing the bundle failed")?;
             }
 
+            embassy_time::Timer::after(embassy_time::Duration::from_secs(3)).await;
+
             // TODO
             Ok(path.file_name().unwrap().to_str().unwrap().to_string())
         } else {

@@ -3,11 +3,12 @@ use core::cmp::Ordering;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::Stylize;
-use ratatui::text::{Line, Text};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Widget};
 use ratatui::DefaultTerminal;
 
 use crate::bundle::{Bundle, ProvisioningStatus};
+use crate::logger::LOGGER;
 use crate::model::{
     Model, Prepared, Preparing, PreparingFailed, Provisioned, Provisioning, Readouts, State,
 };
@@ -56,25 +57,23 @@ impl Widget for &State {
 
 impl Widget for &Readouts {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        main_block(Line::from(vec![
-            "Readout ".into(),
-            "<chars> + <Enter> ".into(),
-            "Reset ".into(),
-            "<Esc> ".bold(),
-        ]))
-        .render(area, buf);
+        let area = render_main(
+            Some(" Readouts ".bold()),
+            Some(Line::from(vec![
+                "Readout ".into(),
+                "<chars> + <Enter> ".blue().bold(),
+                "Reset ".into(),
+                "<Esc> ".blue().bold(),
+            ])),
+            area,
+            buf,
+        );
 
         let layout = Layout::new(
             Direction::Vertical,
-            [
-                Constraint::Min(1),
-                Constraint::Min(4),
-                Constraint::Length(100),
-            ],
+            [Constraint::Min(5), Constraint::Length(100)],
         )
         .split(area.inner(Margin::new(2, 2)));
-
-        Paragraph::new("== Readouts").bold().render(layout[0], buf);
 
         Table::new(
             self.readouts
@@ -82,7 +81,7 @@ impl Widget for &Readouts {
                 .enumerate()
                 .map(|(index, (name, value))| {
                     let mut row = Row::new::<Vec<Cell>>(vec![
-                        if index == self.active { " >" } else { "" }.into(),
+                        if index == self.active { ">" } else { "" }.into(),
                         name.as_str().into(),
                         match self.active.cmp(&index) {
                             Ordering::Less => "(empty)".into(),
@@ -99,49 +98,56 @@ impl Widget for &Readouts {
                 })
                 .collect::<Vec<_>>(),
             vec![
-                Constraint::Length(2),
+                Constraint::Length(1),
                 Constraint::Percentage(20),
                 Constraint::Percentage(80),
             ],
         )
         .header(Row::new::<Vec<Cell>>(vec!["".into(), "Name".into(), "Value".into()]).gray())
-        .render(layout[1], buf);
+        .render(layout[0], buf);
     }
 }
 
 impl Widget for &Preparing {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let area = render_main(
+            Some(Span::from(" Bundle Preparation ").bold()),
+            Some(Line::from(vec![" Quit ".into(), "<Esc> ".blue().bold()])),
+            area,
+            buf,
+        );
+
         const PROGRESS: &[char] = &['-', '\\', '|', '/'];
 
-        let instructions = Line::from(vec![" Quit ".into(), "<Esc> ".blue().bold()]);
-
-        let counter_text = Text::from(vec![Line::from(vec![
+        let counter_text = Text::from(format!(
+            "{}... {}",
             if self.status.is_empty() {
                 "Looking for firmware bundles".into()
             } else {
-                self.status.clone().into()
+                self.status.clone()
             },
-            "... ".into(),
-            format!(" {} ", PROGRESS[self.counter.0 % 4]).into(),
-        ])]);
+            PROGRESS[self.counter.0 % 4]
+        ))
+        .bold();
 
         Paragraph::new(counter_text)
-            .centered()
-            .block(main_block(instructions))
-            .render(area, buf);
+            .left_aligned()
+            .render(area.inner(Margin::new(2, 2)), buf);
     }
 }
 
 impl Widget for &PreparingFailed {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let instructions = vec![
-            " Re-try ".into(),
-            "<Enter> ".bold(),
-            "Quit ".into(),
-            "<Esc> ".bold(),
-        ];
-
-        main_block(Line::from(instructions)).render(area, buf);
+        main_block(
+            Some(Span::from(" Bundle Preparation ".bold())),
+            Some(Line::from(vec![
+                " Re-try ".into(),
+                "<Enter> ".blue().bold(),
+                "Quit ".into(),
+                "<Esc> ".blue().bold(),
+            ])),
+        )
+        .render(area, buf);
 
         let layout = Layout::new(
             Direction::Vertical,
@@ -149,13 +155,11 @@ impl Widget for &PreparingFailed {
         )
         .split(area.inner(Margin::new(2, 2)));
 
-        Paragraph::new(Line::from(vec![
-            "Cannot fetch bundle for provisioning".into()
-        ]))
-        .bold()
-        .green()
-        .centered()
-        .render(layout[2], buf);
+        Paragraph::new("Cannot fetch bundle for provisioning")
+            .bold()
+            .green()
+            .centered()
+            .render(layout[2], buf);
     }
 }
 
@@ -183,14 +187,20 @@ impl Widget for &Provisioning {
 
 impl Widget for &Provisioned {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let instructions = vec![
-            " Next ".into(),
-            "<Enter> ".bold(),
-            "Quit ".into(),
-            "<Esc> ".bold(),
-        ];
-
-        main_block(Line::from(instructions)).render(area, buf);
+        main_block(
+            Some(Line::from(vec![
+                " ".into(),
+                self.bundle_name.as_str().bold(),
+                " ".into(),
+            ])),
+            Some(Line::from(vec![
+                " Next ".into(),
+                "<Enter> ".blue().bold(),
+                "Quit ".into(),
+                "<Esc> ".blue().bold(),
+            ])),
+        )
+        .render(area, buf);
 
         let layout = Layout::new(
             Direction::Vertical,
@@ -263,48 +273,41 @@ impl ProvisionedBundle<'_> {
 
 impl Widget for &ProvisionedBundle<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let mut instructions = vec![];
-
-        if !self.provisioning {
-            instructions.extend_from_slice(&[
-                " Provision ".into(),
-                "<Enter> ".bold(),
-                "Quit ".into(),
-                "<Esc> ".bold(),
-            ]);
-        }
-
-        main_block(Line::from(instructions)).render(area, buf);
+        let area = render_main(
+            Some(Line::from(vec![
+                " ".into(),
+                "Bundle ".bold(),
+                self.bundle.name.as_str().bold(),
+                " ".into(),
+            ])),
+            (!self.provisioning).then(|| {
+                Line::from(vec![
+                    " Provision ".into(),
+                    "<Enter> ".blue().bold(),
+                    "Quit ".into(),
+                    "<Esc> ".blue().bold(),
+                ])
+            }),
+            area,
+            buf,
+        );
 
         let layout = Layout::new(
             Direction::Vertical,
             [
                 Constraint::Min(1),
-                Constraint::Min(1),
                 Constraint::Min((self.bundle.parts_mapping.len() + 1) as _),
                 Constraint::Min(1),
                 Constraint::Min(1),
                 Constraint::Min(3),
-                Constraint::Min(1),
-                Constraint::Min(1),
-                Constraint::Length(100),
+                Constraint::Percentage(100),
             ],
         )
         .split(area.inner(Margin::new(2, 2)));
 
-        Paragraph::new(Line::from(vec![
-            "== Bundle ".into(),
-            self.bundle.name.as_str().into(),
-            " ==".into(),
-        ]))
-        .bold()
-        .green()
-        .centered()
-        .render(layout[0], buf);
-
         Paragraph::new("== Partitions")
             .bold()
-            .render(layout[1], buf);
+            .render(layout[0], buf);
 
         Table::new(
             self.bundle.parts_mapping.iter().map(|mapping| {
@@ -392,22 +395,52 @@ impl Widget for &ProvisionedBundle<'_> {
             ])
             .gray(),
         )
-        .render(layout[2], buf);
+        .render(layout[1], buf);
 
-        Paragraph::new("== EFUSE").bold().render(layout[4], buf);
-
-        Paragraph::new("== Log").bold().render(layout[7], buf);
-
-        Paragraph::new("TBD").render(layout[8], buf);
+        Paragraph::new("== EFUSE").bold().render(layout[3], buf);
     }
 }
 
-fn main_block(instructions: Line) -> Block {
-    let title = Line::from(" ESP32 Factory Provisioning ").bold();
+fn render_main<'a>(
+    title: Option<impl Into<Line<'a>>>,
+    instructions: Option<impl Into<Line<'a>>>,
+    area: Rect,
+    buf: &mut Buffer,
+) -> Rect {
+    let layout = Layout::vertical([Constraint::Percentage(100), Constraint::Length(4)]).split(area);
 
-    Block::bordered()
-        .title(title.left_aligned().green())
-        .title_bottom(instructions.right_aligned().yellow())
-        .on_blue()
-        .white()
+    main_block(title, instructions).render(layout[0], buf);
+    render_log(layout[1], buf);
+
+    layout[0]
+}
+
+fn render_log(area: Rect, buf: &mut Buffer) {
+    for (index, line) in LOGGER.lock().last_n(area.height as usize).enumerate() {
+        let line = Line::from(line.message.as_str());
+        line.render(Rect::new(area.x, area.y + index as u16, area.width, 1), buf);
+    }
+}
+
+fn main_block<'a, T, I>(title: Option<T>, instructions: Option<I>) -> Block<'a>
+where
+    T: Into<Line<'a>>,
+    I: Into<Line<'a>>,
+{
+    let mut block = Block::bordered().title_top(
+        Line::from(" ESP32 Factory Provisioning ")
+            .bold()
+            .left_aligned()
+            .green(),
+    );
+
+    if let Some(title) = title {
+        block = block.title_top(title.into().bold().centered().green());
+    }
+
+    if let Some(instructions) = instructions {
+        block = block.title_bottom(instructions.into().right_aligned().yellow());
+    }
+
+    block.on_blue().white()
 }

@@ -23,6 +23,7 @@ bin = ["directories", "clap"]
 [dependencies]
 crossterm = "0.28"
 ratatui = "0.29"
+tui-logger = "0.14"
 embassy-sync = { version = "0.5", features = ["std"] }
 embassy-time = { version = "0.3", features = ["std", "generic-queue"] }
 embassy-futures = "0.1"
