@@ -7,10 +7,11 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use anyhow::Context;
 use esp_idf_part::{Partition, SubType, Type};
 
 use espflash::flasher::FlashSize;
-use log::warn;
+use log::{info, warn};
 use serde::Deserialize;
 
 use zip::ZipArchive;
@@ -108,15 +109,18 @@ extra_1,  data, 0x06,            ,   20K,
 
         match bundle_type {
             BundleType::Complete => {
+                info!("Bundle {name} is a ZIP file");
                 Self::from_zip_bundle(name, &mut ZipArchive::new(bundle_content)?)
             }
             BundleType::BinAppImage => {
+                info!("Bundle {name} is a binary App image");
                 let mut bytes = Vec::new();
                 bundle_content.read_to_end(&mut bytes)?;
 
                 Self::from_bin_app_image(name, default_params, &bytes)
             }
             BundleType::ElfAppImage => {
+                info!("Bundle {name} is an ELF App image");
                 let mut bytes = Vec::new();
                 bundle_content.read_to_end(&mut bytes)?;
 
@@ -136,6 +140,8 @@ extra_1,  data, 0x06,            ,   20K,
         params: Params,
         app_image: &[u8],
     ) -> anyhow::Result<Self> {
+        info!("About to prep the ELF App image bundle {name}");
+
         let app_image = Image::new_elf(flash::elf2bin(app_image, params.chip)?);
 
         Self::from_parts(
@@ -159,6 +165,8 @@ extra_1,  data, 0x06,            ,   20K,
         params: Params,
         app_image: &[u8],
     ) -> anyhow::Result<Self> {
+        info!("About to prep the binary App image bundle {name}");
+
         let app_image = Image::new(app_image.to_vec());
 
         Self::from_parts(
@@ -180,19 +188,40 @@ extra_1,  data, 0x06,            ,   20K,
     where
         T: Read + Seek,
     {
+        info!("About to prep the ZIP image bundle {name}");
+
         let mut params_str = String::new();
         zip.by_name(Self::PARAMS_FILE_NAME)?
-            .read_to_string(&mut params_str)?;
+            .read_to_string(&mut params_str)
+            .with_context(|| {
+                format!(
+                    "Loading {} from the ZIP file failed",
+                    Self::PARAMS_FILE_NAME
+                )
+            })?;
 
         let params: Params = toml::from_str(&params_str)?;
 
         let part_table_str = zip
             .index_for_name(Self::PART_TABLE_FILE_NAME)
             .map(|index| {
-                let mut zip_file = zip.by_index(index)?;
+                let mut zip_file = zip.by_index(index).with_context(|| {
+                    format!(
+                        "Loading {} from the ZIP file failed",
+                        Self::PARAMS_FILE_NAME
+                    )
+                })?;
+
                 let mut part_table_str = String::new();
 
-                zip_file.read_to_string(&mut part_table_str)?;
+                zip_file
+                    .read_to_string(&mut part_table_str)
+                    .with_context(|| {
+                        format!(
+                            "Loading {} from the ZIP file failed",
+                            Self::PART_TABLE_FILE_NAME
+                        )
+                    })?;
 
                 Ok::<_, anyhow::Error>(part_table_str)
             })
@@ -201,10 +230,20 @@ extra_1,  data, 0x06,            ,   20K,
         let bootloader_image = zip
             .index_for_name(Self::BOOTLOADER_FILE_NAME)
             .map(|index| {
-                let mut zip_file = zip.by_index(index)?;
+                let mut zip_file = zip.by_index(index).with_context(|| {
+                    format!(
+                        "Loading {} from the ZIP file failed",
+                        Self::BOOTLOADER_FILE_NAME
+                    )
+                })?;
 
                 let mut data = Vec::new();
-                zip_file.read_to_end(&mut data)?;
+                zip_file.read_to_end(&mut data).with_context(|| {
+                    format!(
+                        "Loading {} from the ZIP file failed",
+                        Self::BOOTLOADER_FILE_NAME
+                    )
+                })?;
 
                 Ok::<_, anyhow::Error>(Image::new(data))
             })
@@ -219,10 +258,14 @@ extra_1,  data, 0x06,            ,   20K,
         let images: anyhow::Result<Vec<_>> = image_names
             .into_iter()
             .map(|file_name| {
-                let mut zip_file = zip.by_name(&file_name)?;
+                let mut zip_file = zip
+                    .by_name(&file_name)
+                    .with_context(|| format!("Loading {} from the ZIP file failed", file_name))?;
 
                 let mut data = Vec::new();
-                zip_file.read_to_end(&mut data)?;
+                zip_file
+                    .read_to_end(&mut data)
+                    .with_context(|| format!("Loading {} from the ZIP file failed", file_name))?;
 
                 let name = file_name
                     .strip_prefix(Self::IMAGES_PREFIX)
@@ -252,10 +295,14 @@ extra_1,  data, 0x06,            ,   20K,
         let efuses: anyhow::Result<Vec<_>> = efuse_names
             .into_iter()
             .map(|file_name| {
-                let mut zip_file = zip.by_name(file_name.as_str())?;
+                let mut zip_file = zip
+                    .by_name(file_name.as_str())
+                    .with_context(|| format!("Loading {} from the ZIP file failed", file_name))?;
 
                 let mut data = Vec::new();
-                zip_file.read_to_end(&mut data)?;
+                zip_file
+                    .read_to_end(&mut data)
+                    .with_context(|| format!("Loading {} from the ZIP file failed", file_name))?;
 
                 Ok(Efuse {
                     name: file_name
@@ -296,6 +343,8 @@ extra_1,  data, 0x06,            ,   20K,
         images: impl Iterator<Item = (String, Image)>,
         efuses: impl Iterator<Item = Efuse>,
     ) -> anyhow::Result<Self> {
+        info!("Prepping bundle {name} from parts");
+
         let images = images.collect::<HashMap<_, _>>();
 
         let part_table_str = part_table_str.unwrap_or(Self::DEFAULT_PART_TABLE);
@@ -303,8 +352,13 @@ extra_1,  data, 0x06,            ,   20K,
             flash::default_bootloader(params.chip, params.flash_size).map(Image::new)
         })?;
 
-        let part_table = esp_idf_part::PartitionTable::try_from_str(part_table_str)?;
-        let part_table_image = Image::new(part_table.to_bin()?);
+        let part_table = esp_idf_part::PartitionTable::try_from_str(part_table_str)
+            .context("Parsing CSV partition table failed")?;
+        let part_table_image = Image::new(
+            part_table
+                .to_bin()
+                .context("Converting CSV partition table to binary failed")?,
+        );
 
         let part_table_offset = part_table.partitions()[0].offset() - Self::PART_TABLE_SIZE as u32;
 
@@ -356,6 +410,8 @@ extra_1,  data, 0x06,            ,   20K,
                 }),
         )
         .collect();
+
+        info!("Bundle {name} prepared");
 
         Ok(Self {
             name,

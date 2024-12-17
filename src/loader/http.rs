@@ -2,6 +2,8 @@ use std::io::Write;
 
 use anyhow::Context;
 
+use log::info;
+
 use super::BundleLoader;
 
 /// A loader that reads bundles from an HTTP(S) server.
@@ -44,6 +46,15 @@ impl BundleLoader for HttpLoader {
     where
         W: Write,
     {
+        if let Some(id) = id {
+            info!(
+                "About to fetch a bundle with ID `{id}` from URL `{}`...",
+                self.url
+            );
+        } else {
+            info!("About to fetch a random bundle from URL `{}`...", self.url);
+        }
+
         let client = reqwest::Client::new();
 
         let mut builder = if let Some(id) = id {
@@ -82,8 +93,10 @@ impl BundleLoader for HttpLoader {
         {
             write
                 .write_all(&bytes)
-                .context("Writing the response failed")?;
+                .context("Loading the bundle failed")?;
         }
+
+        info!("Loaded bundle `{}`", bundle_name);
 
         Ok(bundle_name)
     }

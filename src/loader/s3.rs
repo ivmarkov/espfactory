@@ -1,7 +1,12 @@
+use core::fmt::{self, Display};
+
 use std::io::Write;
 
+use anyhow::Context;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::get_object::GetObjectError;
+
+use log::info;
 
 use super::{BundleLoader, BundleType};
 
@@ -63,6 +68,18 @@ impl BundleLoader for S3Loader {
     where
         W: Write,
     {
+        if let Some(id) = id {
+            info!(
+                "About to fetch a bundle with ID `{id}` from S3 bucket `{}`...",
+                BucketWithPrefix::new(&self.bucket, self.prefix.as_deref())
+            );
+        } else {
+            info!(
+                "About to fetch a random bundle from S3 bucket `{}`...",
+                BucketWithPrefix::new(&self.bucket, self.prefix.as_deref())
+            );
+        }
+
         let config = aws_config::load_from_env().await;
         let client = aws_sdk_s3::Client::new(&config);
 
@@ -99,7 +116,7 @@ impl BundleLoader for S3Loader {
                     {
                         continue
                     }
-                    Err(other) => Err(other)?,
+                    Err(other) => Err(other).context("Loading the bundle failed")?,
                 }
             }
         } else {
@@ -127,10 +144,13 @@ impl BundleLoader for S3Loader {
                                 .bucket(&self.bucket)
                                 .key(key)
                                 .send()
-                                .await?;
+                                .await
+                                .context("Loading the bundle failed")?;
 
                             while let Some(bytes) = object_data.body.try_next().await? {
-                                write.write_all(&bytes)?;
+                                write
+                                    .write_all(&bytes)
+                                    .context("Loading the bundle failed")?;
                             }
 
                             let bundle_name = key.split('/').last().unwrap_or(key).to_string();
@@ -141,8 +161,11 @@ impl BundleLoader for S3Loader {
                                     .bucket(&self.bucket)
                                     .key(key)
                                     .send()
-                                    .await?;
+                                    .await
+                                    .context("Deleting the bundle after loading failed")?;
                             }
+
+                            info!("Loaded bundle `{}`", bundle_name);
 
                             return Ok(bundle_name);
                         }
@@ -158,5 +181,27 @@ impl BundleLoader for S3Loader {
         }
 
         anyhow::bail!("No bundles found in the bucket")
+    }
+}
+
+#[derive(Debug)]
+struct BucketWithPrefix<'a> {
+    bucket: &'a str,
+    prefix: Option<&'a str>,
+}
+
+impl<'a> BucketWithPrefix<'a> {
+    const fn new(bucket: &'a str, prefix: Option<&'a str>) -> Self {
+        Self { bucket, prefix }
+    }
+}
+
+impl Display for BucketWithPrefix<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(prefix) = self.prefix {
+            write!(f, "{}/{}", self.bucket, prefix)
+        } else {
+            write!(f, "{}", self.bucket)
+        }
     }
 }

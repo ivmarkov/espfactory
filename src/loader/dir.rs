@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 
+use log::info;
+
 use super::BundleLoader;
 
 /// A loader that reads bundles from a directory.
@@ -42,6 +44,18 @@ impl BundleLoader for DirLoader {
     where
         W: Write,
     {
+        if let Some(id) = id {
+            info!(
+                "About to scan directory `{}` for a bundle with ID `{id}`...",
+                self.path.display()
+            );
+        } else {
+            info!(
+                "About to scan directory `{}` for a random bundle...",
+                self.path.display()
+            );
+        }
+
         let file_name = fs::read_dir(&self.path)
             .context("Cannot open the bundles' directory")?
             .find_map(|entry| {
@@ -75,18 +89,29 @@ impl BundleLoader for DirLoader {
             .transpose()?;
 
         if let Some(path) = file_name {
+            info!(
+                "Found bundle `{}`",
+                path.file_name().unwrap().to_str().unwrap_or("???")
+            );
+
             let mut file = fs::File::open(&path).context("Loading the bundle failed")?;
 
-            io::copy(&mut file, &mut write).context("Copying the bundle failed")?;
+            io::copy(&mut file, &mut write).context("Loading the bundle failed")?;
 
             if id.is_none() && self.delete_after_load {
-                fs::remove_file(&path).context("Removing the bundle failed")?;
+                fs::remove_file(&path)
+                    .context("Removing the random bundle from the directory failed")?;
             }
 
-            embassy_time::Timer::after(embassy_time::Duration::from_secs(3)).await;
+            info!(
+                "Loaded bundle `{}`",
+                path.file_name().unwrap().to_str().unwrap_or("???")
+            );
 
             // TODO
             Ok(path.file_name().unwrap().to_str().unwrap().to_string())
+        } else if let Some(id) = id {
+            anyhow::bail!("No bundle found for ID `{}`", id)
         } else {
             anyhow::bail!("No files found in bundles' directory")
         }

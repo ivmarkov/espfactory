@@ -365,6 +365,8 @@ where
             }
         };
 
+        info!("Bundle loaded into file `{}`", bundle.display());
+
         Ok(bundle)
     }
 
@@ -383,6 +385,8 @@ where
         self.model.modify(|state| {
             state.preparing_mut().status = format!("Processing {bundle_name}");
         });
+
+        info!("About to prep bundle file `{}`", bundle_path.display());
 
         let mut bundle_file =
             File::open(bundle_path).context("Opening the loaded bundle file failed")?;
@@ -404,6 +408,7 @@ where
             });
 
             let ps = state.provisioning_mut();
+            info!("About to provision bundle `{}`", ps.bundle.name);
 
             ps.bundle.set_status_all(ProvisioningStatus::Pending);
         });
@@ -414,9 +419,14 @@ where
             (
                 ps.bundle.params.chip,
                 ps.bundle.params.flash_size,
-                ps.bundle.get_flash_data().collect(),
+                ps.bundle.get_flash_data().collect::<Vec<_>>(),
             )
         });
+
+        info!(
+            "About to flash data:\nChip: {chip:?}\nFlash Size: {flash_size:?}\nImages:{}",
+            flash_data.len()
+        );
 
         flash::flash(
             self.conf.port.as_deref().unwrap_or("/dev/ttyUSB0"), // TODO
@@ -428,13 +438,15 @@ where
         )
         .await?;
 
+        info!("Flash complete");
+
         let bundle_loaded_dir = self.bundle_dir.join(Self::BUNDLE_LOADED_DIR_NAME);
         fs::create_dir_all(&bundle_loaded_dir)
             .context("Creating loaded bundle directory failed")?;
 
         for entry in bundle_loaded_dir.read_dir()? {
             let entry = entry?;
-            fs::remove_file(entry.path()).context("Emptying loadec bundle directory failed")?;
+            fs::remove_file(entry.path()).context("Emptying loaded bundle directory failed")?;
         }
 
         self.model.modify(|state| {
@@ -443,6 +455,11 @@ where
                 message: "Provisioning complete".to_string(),
                 error: false,
             });
+
+            info!(
+                "Provisioning bundle `{}` complete",
+                state.provisioning().bundle.name
+            );
         });
 
         Ok(())

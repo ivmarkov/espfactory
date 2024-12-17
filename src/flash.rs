@@ -44,7 +44,8 @@ pub fn default_bootloader(chip: Chip, flash_size: Option<FlashSize>) -> anyhow::
 
     // There should always be a bootloader segment and it is always the first one
     // TODO: Internal `espflash` detail, maybe ask them to expose this in a more user-friendly way
-    file.write_all(&image.flash_segments().next().unwrap().data)?;
+    file.write_all(&image.flash_segments().next().unwrap().data)
+        .context("Loading default bootloader failed")?;
 
     Ok(file)
 }
