@@ -59,9 +59,9 @@ impl Widget for &Readouts {
             Some(" Readouts ".bold()),
             Some(Line::from(vec![
                 "Readout ".into(),
-                "<chars> + <Enter> ".blue().bold(),
+                "<chars> + <Enter> ".yellow().bold(),
                 "Reset ".into(),
-                "<Esc> ".blue().bold(),
+                "<Esc> ".yellow().bold(),
             ])),
             area,
             buf,
@@ -110,7 +110,7 @@ impl Widget for &Preparing {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = render_main(
             Some(Span::from(" Bundle Preparation ").bold()),
-            Some(Line::from(vec![" Quit ".into(), "<Esc> ".blue().bold()])),
+            Some(Line::from(vec![" Quit ".into(), "<Esc> ".yellow().bold()])),
             area,
             buf,
         );
@@ -163,12 +163,12 @@ impl Widget for &Status {
             Some(if self.error {
                 Line::from(vec![
                     " Re-try ".into(),
-                    "<Enter> ".blue().bold(),
+                    "<Enter> ".yellow().bold(),
                     "Quit ".into(),
-                    "<Esc> ".blue().bold(),
+                    "<Esc> ".yellow().bold(),
                 ])
             } else {
-                Line::from(vec![" Continue ".into(), "<Enter> ".blue().bold()])
+                Line::from(vec![" Continue ".into(), "<Enter> ".yellow().bold()])
             }),
             area,
             buf,
@@ -177,9 +177,7 @@ impl Widget for &Status {
         let mut para = Paragraph::new(self.message.clone()).bold();
 
         if self.error {
-            para = para.red();
-        } else {
-            para = para.green();
+            para = para.yellow();
         }
 
         para.render(area.inner(Margin::new(2, 4)), buf);
@@ -244,9 +242,9 @@ impl Widget for &ProvisionedBundle<'_> {
             (!self.provisioning).then(|| {
                 Line::from(vec![
                     " Provision ".into(),
-                    "<Enter> ".blue().bold(),
+                    "<Enter> ".yellow().bold(),
                     "Quit ".into(),
-                    "<Esc> ".blue().bold(),
+                    "<Esc> ".yellow().bold(),
                 ])
             }),
             area,
