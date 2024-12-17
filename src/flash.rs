@@ -88,25 +88,31 @@ where
         let finished = finished.clone();
 
         std::thread::spawn(move || {
-            let mut flasher = new(&port, chip)?;
+            let result = (|| {
+                let mut flasher = new(&port, chip)?;
 
-            if let Some(flash_size) = flash_size {
-                flasher.set_flash_size(flash_size);
-            }
+                if let Some(flash_size) = flash_size {
+                    flasher.set_flash_size(flash_size);
+                }
 
-            let segments = flash_data
-                .iter()
-                .map(|data| RomSegment {
-                    addr: data.offset,
-                    data: Cow::Borrowed(data.data.as_ref()),
-                })
-                .collect::<Vec<_>>();
+                let segments = flash_data
+                    .iter()
+                    .map(|data| RomSegment {
+                        addr: data.offset,
+                        data: Cow::Borrowed(data.data.as_ref()),
+                    })
+                    .collect::<Vec<_>>();
 
-            flasher.write_bins_to_flash(&segments, Some(&mut progress))?;
+                flasher.write_bins_to_flash(&segments, Some(&mut progress))?;
+
+                Ok::<_, anyhow::Error>(())
+            })();
 
             finished.signal(());
 
-            Ok::<_, anyhow::Error>(())
+            result?;
+
+            Ok(())
         })
     };
 

@@ -10,13 +10,14 @@ use embassy_futures::select::select3;
 use embassy_time::{Duration, Ticker};
 
 use espflash::flasher::ProgressCallbacks;
-use log::info;
+
+use log::{error, info};
 
 use crate::bundle::{Bundle, Params, ProvisioningStatus};
 use crate::flash;
 use crate::input::Input;
 use crate::loader::BundleLoader;
-use crate::model::{Model, Prepared, Preparing, Provisioned, Provisioning, Readouts, State};
+use crate::model::{Model, Prepared, Preparing, Provisioning, Readouts, State, Status};
 use crate::utils::futures::{Coalesce, IntoFallibleFuture};
 use crate::{BundleIdentification, Config};
 
@@ -73,17 +74,76 @@ where
     ///   Necessary as some states require direct user input (e.g. readouts)
     pub async fn run(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         loop {
-            self.readout(input).await?;
+            loop {
+                self.readout(input).await;
 
-            self.prepare(input).await?;
+                match self.prepare(input).await {
+                    Ok(()) => break,
+                    Err(err) => {
+                        error!("Preparing a bundle failed: {err}");
 
-            if !input.wait_quit_or(KeyCode::Enter).await? {
-                break;
+                        self.model.modify(|state| {
+                            *state = State::ProvisioningOutcome(Status {
+                                title: " Preparing a bundle failed ".to_string(),
+                                message: err.to_string(),
+                                error: true,
+                            });
+                        });
+
+                        if !input.wait_quit_or(KeyCode::Enter).await {
+                            return Err(err);
+                        }
+                    }
+                }
             }
 
-            self.provision().await?;
+            loop {
+                if !input.wait_quit_or(KeyCode::Enter).await {
+                    break;
+                }
 
-            if !input.wait_quit_or(KeyCode::Enter).await? {
+                match self.provision().await {
+                    Ok(()) => break,
+                    Err(err) => {
+                        error!("Provisioning the bundle failed: {err}");
+
+                        let mut prepared_bundle = None;
+
+                        self.model.modify(|state| {
+                            let prev_state = core::mem::replace(
+                                state,
+                                State::ProvisioningOutcome(Status {
+                                    title: format!(
+                                        " Provisioning {} failed ",
+                                        state.provisioning().bundle.name
+                                    ),
+                                    message: err.to_string(),
+                                    error: true,
+                                }),
+                            );
+
+                            let State::Provisioning(Provisioning { bundle, .. }) = prev_state
+                            else {
+                                unreachable!();
+                            };
+
+                            prepared_bundle = Some(bundle);
+                        });
+
+                        if !input.wait_quit_or(KeyCode::Enter).await {
+                            return Err(err);
+                        }
+
+                        self.model.modify(|state| {
+                            *state = State::Prepared(Prepared {
+                                bundle: prepared_bundle.unwrap(),
+                            });
+                        });
+                    }
+                }
+            }
+
+            if !input.wait_quit_or(KeyCode::Enter).await {
                 break;
             }
         }
@@ -92,7 +152,7 @@ where
     }
 
     /// Process the readouts state by reading the necessary IDs from the user
-    async fn readout(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
+    async fn readout(&mut self, input: &mut Input<'_>) {
         let init = |readouts: &mut Readouts| {
             readouts.readouts.clear();
             readouts.active = 0;
@@ -116,10 +176,15 @@ where
             }
         };
 
-        self.model.modify(|state| init(state.readouts_mut()));
+        self.model.modify(|state| {
+            let mut readouts = Readouts::new();
+            init(&mut readouts);
+
+            *state = State::Readouts(readouts);
+        });
 
         while !self.model.get(|state| state.readouts().is_ready()) {
-            let key = input.get().await?;
+            let key = input.get().await;
 
             self.model.maybe_modify(|state| {
                 let readouts = state.readouts_mut();
@@ -153,8 +218,6 @@ where
                 false
             });
         }
-
-        Ok(())
     }
 
     /// Prepare the bundle to be provisioned by loading it from the storage
@@ -213,7 +276,7 @@ where
                 })
             })
             .into_fallible(),
-            input.wait_quit(),
+            input.wait_quit().into_fallible(),
             self.prep_bundle(bundle_id.as_deref()),
         )
         .coalesce()
@@ -362,8 +425,10 @@ where
         }
 
         self.model.modify(|state| {
-            *state = State::Provisioned(Provisioned {
-                bundle_name: state.provisioning().bundle.name.clone(),
+            *state = State::ProvisioningOutcome(Status {
+                title: format!(" {} ", state.provisioning().bundle.name),
+                message: "Provisioning complete".to_string(),
+                error: false,
             });
         });
 

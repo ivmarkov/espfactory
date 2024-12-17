@@ -9,9 +9,7 @@ use ratatui::DefaultTerminal;
 
 use crate::bundle::{Bundle, ProvisioningStatus};
 use crate::logger::LOGGER;
-use crate::model::{
-    Model, Prepared, Preparing, PreparingFailed, Provisioned, Provisioning, Readouts, State,
-};
+use crate::model::{Model, Prepared, Preparing, Provisioning, Readouts, State, Status};
 
 /// The view (UI) of the application
 ///
@@ -47,10 +45,10 @@ impl Widget for &State {
         match self {
             State::Readouts(readouts) => readouts.render(area, buf),
             State::Preparing(searching) => searching.render(area, buf),
-            State::PreparingFailed(empty) => empty.render(area, buf),
+            State::PreparingFailed(failure) => failure.render(area, buf),
             State::Prepared(loaded) => loaded.render(area, buf),
             State::Provisioning(provisioning) => provisioning.render(area, buf),
-            State::Provisioned(ready) => ready.render(area, buf),
+            State::ProvisioningOutcome(outcome) => outcome.render(area, buf),
         }
     }
 }
@@ -136,33 +134,6 @@ impl Widget for &Preparing {
     }
 }
 
-impl Widget for &PreparingFailed {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        main_block(
-            Some(Span::from(" Bundle Preparation ".bold())),
-            Some(Line::from(vec![
-                " Re-try ".into(),
-                "<Enter> ".blue().bold(),
-                "Quit ".into(),
-                "<Esc> ".blue().bold(),
-            ])),
-        )
-        .render(area, buf);
-
-        let layout = Layout::new(
-            Direction::Vertical,
-            [Constraint::Min(1), Constraint::Min(2), Constraint::Min(1)],
-        )
-        .split(area.inner(Margin::new(2, 2)));
-
-        Paragraph::new("Cannot fetch bundle for provisioning")
-            .bold()
-            .green()
-            .centered()
-            .render(layout[2], buf);
-    }
-}
-
 impl Widget for &Prepared {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let pb = ProvisionedBundle {
@@ -185,47 +156,37 @@ impl Widget for &Provisioning {
     }
 }
 
-impl Widget for &Provisioned {
+impl Widget for &Status {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        main_block(
-            Some(Line::from(vec![
-                " ".into(),
-                self.bundle_name.as_str().bold(),
-                " ".into(),
-            ])),
-            Some(Line::from(vec![
-                " Next ".into(),
-                "<Enter> ".blue().bold(),
-                "Quit ".into(),
-                "<Esc> ".blue().bold(),
-            ])),
-        )
-        .render(area, buf);
+        let area = render_main(
+            Some(self.title.clone().bold()),
+            Some(if self.error {
+                Line::from(vec![
+                    " Re-try ".into(),
+                    "<Enter> ".blue().bold(),
+                    "Quit ".into(),
+                    "<Esc> ".blue().bold(),
+                ])
+            } else {
+                Line::from(vec![" Continue ".into(), "<Enter> ".blue().bold()])
+            }),
+            area,
+            buf,
+        );
 
-        let layout = Layout::new(
-            Direction::Vertical,
-            [Constraint::Min(1), Constraint::Min(2), Constraint::Min(1)],
-        )
-        .split(area.inner(Margin::new(2, 2)));
+        let mut para = Paragraph::new(self.message.clone()).bold();
 
-        Paragraph::new(Line::from(vec![
-            "== Bundle ".into(),
-            self.bundle_name.as_str().into(),
-            " ==".into(),
-        ]))
-        .bold()
-        .green()
-        .centered()
-        .render(layout[0], buf);
+        if self.error {
+            para = para.red();
+        } else {
+            para = para.green();
+        }
 
-        Paragraph::new(Line::from(vec!["Provisioned!".into()]))
-            .bold()
-            .green()
-            .centered()
-            .render(layout[2], buf);
+        para.render(area.inner(Margin::new(2, 4)), buf);
     }
 }
 
+#[derive(Debug)]
 struct ProvisionedBundle<'a> {
     bundle: &'a Bundle,
     provisioning: bool,

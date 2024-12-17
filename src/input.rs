@@ -28,45 +28,45 @@ impl<'a> Input<'a> {
     }
 
     /// Waits for the user to press the `Esc` key swallowing all other key presses
-    pub async fn wait_quit(&self) -> anyhow::Result<()> {
+    pub async fn wait_quit(&self) {
         loop {
-            if self.get().await? == KeyCode::Esc {
-                return Ok(());
+            if self.get().await == KeyCode::Esc {
+                break;
             }
         }
     }
 
     /// Waits for the user to press the `Esc` key or the given key code swallowing all other key presses
-    pub async fn wait_quit_or(&self, code: KeyCode) -> anyhow::Result<bool> {
+    pub async fn wait_quit_or(&self, code: KeyCode) -> bool {
         loop {
-            let got = self.get().await?;
+            let got = self.get().await;
 
             if got == code {
-                return Ok(true);
+                return true;
             } else if got == KeyCode::Esc {
-                return Ok(false);
+                return false;
             }
         }
     }
 
     /// Swallows all key presses
     #[allow(unused)]
-    pub async fn swallow(&self) -> anyhow::Result<()> {
+    pub async fn swallow(&self) {
         loop {
-            self.get().await?;
+            self.get().await;
         }
     }
 
     /// Gets the next key press event
-    pub async fn get(&self) -> anyhow::Result<KeyCode> {
-        self.pump.start()?;
+    pub async fn get(&self) -> KeyCode {
+        self.pump.start();
 
         loop {
             match self.pump.state.event.receive().await {
                 // It's important to check that the event is a key press event as
                 // crossterm also emits key release and repeat events on Windows.
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                    return Ok(key_event.code);
+                    return key_event.code;
                 }
                 // Fake a dirty model to force redraw on resize
                 Event::Resize(_, _) => self.model.modify(|_| {}),
@@ -93,7 +93,7 @@ impl EventsPump {
     }
 
     /// Starts the event pump thread if not started yet
-    fn start(&self) -> anyhow::Result<()> {
+    fn start(&self) {
         let mut thread_join = self.thread_join.lock().unwrap();
 
         if thread_join.is_none() {
@@ -101,8 +101,6 @@ impl EventsPump {
 
             *thread_join = Some(std::thread::spawn(move || state.pump_loop()));
         }
-
-        Ok(())
     }
 }
 

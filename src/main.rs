@@ -15,7 +15,7 @@ extern crate alloc;
 #[command(version, about, long_about = None, arg_required_else_help = true, color = ColorChoice::Auto)]
 struct Cli {
     /// Verbosity
-    #[arg(short = 'l', long, default_value = "regular")]
+    #[arg(short = 'l', long, default_value = "verbose")]
     verbosity: Verbosity,
 
     /// Configuration file
@@ -59,9 +59,9 @@ enum Verbosity {
     /// Silent (no logging)
     Silent,
     /// Regular logging
-    #[default]
     Regular,
     /// Verbose logging
+    #[default]
     Verbose,
 }
 
@@ -174,11 +174,6 @@ fn main() -> anyhow::Result<()> {
     log::set_logger(&LOGGER).unwrap();
     log::set_max_level(LevelFilter::Debug);
 
-    // env_logger::builder()
-    //     .format(|buf, record| writeln!(buf, "{}", record.args()))
-    //     .filter_level(args.verbosity.log_level())
-    //     .init();
-
     let conf = if let Some(conf) = args.conf {
         toml::from_str(&std::fs::read_to_string(conf)?)?
     } else {
@@ -210,15 +205,12 @@ fn main() -> anyhow::Result<()> {
         });
 
     if let Some(loader) = loader {
-        // if let Err(err) = result {
-        //     log::error!("{:#}", err);
-        //     std::process::exit(1);
-        // }
-
         let project_dirs = directories::ProjectDirs::from("org", "ivmarkov", "espfactory")
             .ok_or_else(|| anyhow::anyhow!("Cannot mount project directories"))?;
 
         let bundle_dir = &project_dirs.cache_dir().join("bundle");
+
+        LOGGER.lock().set_level(args.verbosity.log_level());
 
         futures_lite::future::block_on(espfactory::run(&conf.to_lib_config(), bundle_dir, loader))?;
     }

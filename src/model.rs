@@ -77,16 +77,16 @@ impl Model {
 pub enum State {
     /// The model is awaiting readouts
     Readouts(Readouts),
-    /// The model is preparing the bundle
+    /// The model is preparing a bundle
     Preparing(Preparing),
-    /// The model failed to prepare the bundle (error display)
-    PreparingFailed(PreparingFailed),
+    /// The model failed to prepare the bundle
+    PreparingFailed(Status),
     /// The model has prepared the bundle
     Prepared(Prepared),
     /// The model is provisioning the bundle
     Provisioning(Provisioning),
-    /// The model has provisioned the bundle (flashed and possibly efused)
-    Provisioned(Provisioned),
+    /// Priovisioning the bundle has finished
+    ProvisioningOutcome(Status),
 }
 
 impl State {
@@ -125,6 +125,16 @@ impl State {
         }
     }
 
+    /// Get a mutable reference to the preparing failed state
+    /// Panics if the state is not `PreparingFailed`
+    pub fn preparing_failed_mut(&mut self) -> &mut Status {
+        if let Self::PreparingFailed(status) = self {
+            status
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
+    }
+
     /// Get a mutable reference to the prepared state
     /// Panics if the state is not `Prepared`
     pub fn prepared_mut(&mut self) -> &mut Prepared {
@@ -156,10 +166,10 @@ impl State {
     }
 
     /// Get a mutable reference to the provisioned state
-    /// Panics if the state is not `Provisioned`
-    pub fn provisioned_mut(&mut self) -> &mut Provisioned {
-        if let Self::Provisioned(provisioned) = self {
-            provisioned
+    /// Panics if the state is not `ProvisioningOutcome`
+    pub fn provisioning_outcome_mut(&mut self) -> &mut Status {
+        if let Self::ProvisioningOutcome(outcome) = self {
+            outcome
         } else {
             panic!("Unexpected state: {self:?}")
         }
@@ -224,10 +234,6 @@ impl Default for Preparing {
     }
 }
 
-/// The state of the model when preparing the bundle had failed TBD
-#[derive(Debug)]
-pub struct PreparingFailed {}
-
 /// The state of the model when the bundle is prepared
 /// The bundle is ready to be flashed and efused
 #[derive(Debug)]
@@ -245,9 +251,9 @@ pub struct Provisioning {
     pub efuses_status: HashMap<String, ProvisioningStatus>,
 }
 
-/// The state of the model after the bundle was provisioned (flashed and efused)
 #[derive(Debug)]
-pub struct Provisioned {
-    /// The already-provisioned bundle name
-    pub bundle_name: String,
+pub struct Status {
+    pub title: String,
+    pub message: String,
+    pub error: bool,
 }
