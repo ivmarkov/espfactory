@@ -7,7 +7,7 @@ use alloc::sync::Arc;
 use anyhow::Context;
 use crossterm::event::KeyCode;
 
-use embassy_futures::select::select3;
+use embassy_futures::select::{select, select3, Either};
 use embassy_time::{Duration, Ticker};
 
 use espflash::flasher::ProgressCallbacks;
@@ -103,7 +103,7 @@ where
                     break;
                 }
 
-                match self.provision().await {
+                match self.provision(input).await {
                     Ok(()) => break,
                     Err(err) => {
                         error!("Provisioning the bundle failed: {err:?}");
@@ -400,7 +400,13 @@ where
     }
 
     /// Provision the bundle by flashing and optionally efusing the chip with the bundle content
-    async fn provision(&mut self) -> anyhow::Result<()> {
+    async fn provision(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
+        match select(self.prov_bundle(), input.swallow()).await {
+            Either::First(result) => result,
+        }
+    }
+
+    async fn prov_bundle(&mut self) -> anyhow::Result<()> {
         self.model.modify(|state| {
             *state = State::Provisioning(Provisioning {
                 bundle: state.prepared_mut().bundle.clone(),
@@ -424,14 +430,14 @@ where
         });
 
         info!(
-            "About to flash data:\nChip: {chip:?}\nFlash Size: {flash_size:?}\nImages:{}",
+            "About to flash data:\nChip: {chip:?}\nFlash Size: {flash_size:?}\nImages N: {}",
             flash_data.len()
         );
 
         flash::flash(
-            self.conf.port.as_deref().unwrap_or("/dev/ttyUSB0"), // TODO
+            self.conf.port.as_deref(),
             chip,
-            Some(921600), // TODO
+            Some(115200), // TODO
             flash_size,
             flash_data,
             FlashProgress::new(self.model.clone()),
@@ -450,16 +456,16 @@ where
         }
 
         self.model.modify(|state| {
-            *state = State::ProvisioningOutcome(Status {
-                title: format!(" {} ", state.provisioning().bundle.name),
-                message: "Provisioning complete".to_string(),
-                error: false,
-            });
-
             info!(
                 "Provisioning bundle `{}` complete",
                 state.provisioning().bundle.name
             );
+
+            *state = State::ProvisioningOutcome(Status {
+                title: format!(" {} ", state.provisioning().bundle.name),
+                message: "Provisioning complete.".to_string(),
+                error: false,
+            });
         });
 
         Ok(())
