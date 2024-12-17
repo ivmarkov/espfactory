@@ -7,6 +7,7 @@ use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use anyhow::Context;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 
@@ -74,6 +75,7 @@ pub fn elf2bin(elf_data: &[u8], chip: Chip) -> anyhow::Result<Vec<u8>> {
 pub async fn flash<P>(
     port: &str,
     chip: Chip,
+    speed: Option<u32>,
     flash_size: Option<FlashSize>,
     flash_data: Vec<FlashData>,
     mut progress: P,
@@ -89,7 +91,7 @@ where
 
         std::thread::spawn(move || {
             let result = (|| {
-                let mut flasher = new(&port, chip)?;
+                let mut flasher = new(&port, chip, speed)?;
 
                 if let Some(flash_size) = flash_size {
                     flasher.set_flash_size(flash_size);
@@ -103,7 +105,9 @@ where
                     })
                     .collect::<Vec<_>>();
 
-                flasher.write_bins_to_flash(&segments, Some(&mut progress))?;
+                flasher
+                    .write_bins_to_flash(&segments, Some(&mut progress))
+                    .context("Flashing failed")?;
 
                 Ok::<_, anyhow::Error>(())
             })();
@@ -137,12 +141,13 @@ where
     handle.join().unwrap()
 }
 
-fn new(port: &str, chip: Chip) -> anyhow::Result<Flasher> {
+fn new(port: &str, chip: Chip, speed: Option<u32>) -> anyhow::Result<Flasher> {
     let port_info = get_serial_port_info(port)?;
 
     let serial_port = serialport::new(port_info.port_name, 112500)
         .flow_control(FlowControl::None)
-        .open_native()?;
+        .open_native()
+        .context("Opening serial port failed")?;
 
     // NOTE: since `get_serial_port_info` filters out all PCI Port and Bluetooth
     //       serial ports, we can just pretend these types don't exist here.
@@ -163,15 +168,16 @@ fn new(port: &str, chip: Chip) -> anyhow::Result<Flasher> {
 
     let flasher = espflash::flasher::Flasher::connect(
         *Box::new(serial_port),
-        port_info,
-        Some(115200), // TODO
+        port_info.clone(),
+        speed,
         true,
         true,
         false,
         Some(chip.to_flash_chip()),
         ResetAfterOperation::default(),
         ResetBeforeOperation::default(),
-    )?;
+    )
+    .with_context(|| format!("Connecting to serial port {port_info:?} failed"))?;
 
     Ok(flasher)
 }
@@ -238,7 +244,7 @@ fn detect_usb_serial_ports(list_all_ports: bool) -> anyhow::Result<Vec<SerialPor
 /// whose `port_name` field matches the provided `name` argument.
 fn find_serial_port(ports: &[SerialPortInfo], name: &str) -> anyhow::Result<SerialPortInfo> {
     #[cfg(not(target_os = "windows"))]
-    let name = fs::canonicalize(name)?;
+    let name = fs::canonicalize(name).with_context(|| format!("Port {name} not found"))?;
     #[cfg(not(target_os = "windows"))]
     let name = name.to_string_lossy();
 

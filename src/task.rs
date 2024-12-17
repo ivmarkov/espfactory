@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 use alloc::sync::Arc;
 
+use anyhow::Context;
 use crossterm::event::KeyCode;
 
 use embassy_futures::select::select3;
@@ -80,12 +81,12 @@ where
                 match self.prepare(input).await {
                     Ok(()) => break,
                     Err(err) => {
-                        error!("Preparing a bundle failed: {err}");
+                        error!("Preparing a bundle failed: {err:?}");
 
                         self.model.modify(|state| {
                             *state = State::ProvisioningOutcome(Status {
                                 title: " Preparing a bundle failed ".to_string(),
-                                message: err.to_string(),
+                                message: format!("Preparing a bundle failed: {err:?}"),
                                 error: true,
                             });
                         });
@@ -105,7 +106,7 @@ where
                 match self.provision().await {
                     Ok(()) => break,
                     Err(err) => {
-                        error!("Provisioning the bundle failed: {err}");
+                        error!("Provisioning the bundle failed: {err:?}");
 
                         let mut prepared_bundle = None;
 
@@ -117,7 +118,7 @@ where
                                         " Provisioning {} failed ",
                                         state.provisioning().bundle.name
                                     ),
-                                    message: err.to_string(),
+                                    message: format!("Provisioning the bundle failed: {err:?}"),
                                     error: true,
                                 }),
                             );
@@ -296,10 +297,14 @@ where
                 // - For bundles with a bundle ID, always re-download the bundle using the loader
 
                 let loaded_path = self.bundle_dir.join(Self::BUNDLE_LOADED_DIR_NAME);
-                fs::create_dir_all(&loaded_path)?;
+                fs::create_dir_all(&loaded_path)
+                    .context("Creating loaded bundle directory failed")?;
 
-                let files: Result<Vec<DirEntry>, _> = fs::read_dir(&loaded_path)?.collect();
-                let files = files?;
+                let files: Result<Vec<DirEntry>, _> = fs::read_dir(&loaded_path)
+                    .context("Listing loaded bundle directory failed")?
+                    .collect();
+
+                let files = files.context("Listing loaded bundle directory failed")?;
 
                 if files.len() > 1 {
                     anyhow::bail!("More than one bundle found in the bundle workspace directory");
@@ -318,11 +323,13 @@ where
                 .bundle_dir
                 .join(Self::BUNDLE_TEMP_DIR_NAME)
                 .join("bundle");
-            fs::create_dir_all(bundle_temp_path.parent().unwrap())?;
+            fs::create_dir_all(bundle_temp_path.parent().unwrap())
+                .context("Creating the temp bundle directory failed")?;
 
             let bundle_name = {
                 let result = {
-                    let mut temp_file = File::create(&bundle_temp_path)?;
+                    let mut temp_file = File::create(&bundle_temp_path)
+                        .context("Creating temp bundle file failed")?;
 
                     self.bundle_loader.load(&mut temp_file, bundle_id).await
                 };
@@ -330,7 +337,8 @@ where
                 match result {
                     Ok(bundle_name) => {
                         let bundle_new_temp_path = self.bundle_dir.join(&bundle_name);
-                        fs::rename(&bundle_temp_path, &bundle_new_temp_path)?;
+                        fs::rename(&bundle_temp_path, &bundle_new_temp_path)
+                            .context("Renaming temp bundle file failed")?;
 
                         bundle_temp_path = bundle_new_temp_path;
 
@@ -347,9 +355,11 @@ where
                     .bundle_dir
                     .join(Self::BUNDLE_LOADED_DIR_NAME)
                     .join(&bundle_name);
-                fs::create_dir_all(bundle_loaded_path.parent().unwrap())?;
+                fs::create_dir_all(bundle_loaded_path.parent().unwrap())
+                    .context("Creating the loaded bundle directory failed")?;
 
-                fs::rename(bundle_temp_path, bundle_loaded_path)?;
+                fs::rename(bundle_temp_path, bundle_loaded_path)
+                    .context("Moving the temp bundle into the loaded bundle directory failed")?;
             } else {
                 break bundle_temp_path;
             }
@@ -374,7 +384,8 @@ where
             state.preparing_mut().status = format!("Processing {bundle_name}");
         });
 
-        let mut bundle_file = File::open(bundle_path)?;
+        let mut bundle_file =
+            File::open(bundle_path).context("Opening the loaded bundle file failed")?;
 
         let bundle = Bundle::create(bundle_name, Params::default(), &mut bundle_file)?;
 
@@ -410,6 +421,7 @@ where
         flash::flash(
             self.conf.port.as_deref().unwrap_or("/dev/ttyUSB0"), // TODO
             chip,
+            Some(921600), // TODO
             flash_size,
             flash_data,
             FlashProgress::new(self.model.clone()),
@@ -417,11 +429,12 @@ where
         .await?;
 
         let bundle_loaded_dir = self.bundle_dir.join(Self::BUNDLE_LOADED_DIR_NAME);
-        fs::create_dir_all(&bundle_loaded_dir)?;
+        fs::create_dir_all(&bundle_loaded_dir)
+            .context("Creating loaded bundle directory failed")?;
 
         for entry in bundle_loaded_dir.read_dir()? {
             let entry = entry?;
-            fs::remove_file(entry.path())?;
+            fs::remove_file(entry.path()).context("Emptying loadec bundle directory failed")?;
         }
 
         self.model.modify(|state| {

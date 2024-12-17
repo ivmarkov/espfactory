@@ -370,24 +370,6 @@ fn render_main<'a>(
 ) -> Rect {
     let layout = Layout::vertical([Constraint::Percentage(100), Constraint::Length(4)]).split(area);
 
-    main_block(title, instructions).render(layout[0], buf);
-    render_log(layout[1], buf);
-
-    layout[0]
-}
-
-fn render_log(area: Rect, buf: &mut Buffer) {
-    for (index, line) in LOGGER.lock().last_n(area.height as usize).enumerate() {
-        let line = Line::from(line.message.as_str());
-        line.render(Rect::new(area.x, area.y + index as u16, area.width, 1), buf);
-    }
-}
-
-fn main_block<'a, T, I>(title: Option<T>, instructions: Option<I>) -> Block<'a>
-where
-    T: Into<Line<'a>>,
-    I: Into<Line<'a>>,
-{
     let mut block = Block::bordered().title_top(
         Line::from(" ESP32 Factory Provisioning ")
             .bold()
@@ -403,5 +385,24 @@ where
         block = block.title_bottom(instructions.into().right_aligned().yellow());
     }
 
-    block.on_blue().white()
+    block.on_blue().white().render(layout[0], buf);
+
+    let area = layout[1];
+
+    for (index, line) in LOGGER.lock().last_n(area.height as usize).enumerate() {
+        let level = Span::from(format!("[{}] ", line.level.as_str()));
+
+        let level = match line.level {
+            log::Level::Error => level.red().bold(),
+            log::Level::Warn => level.yellow().bold(),
+            log::Level::Info => level.green(),
+            log::Level::Debug => level.blue(),
+            log::Level::Trace => level.cyan(),
+        };
+
+        let line = Line::from(vec![level, line.message.as_str().into()]);
+        line.render(Rect::new(area.x, area.y + index as u16, area.width, 1), buf);
+    }
+
+    layout[0]
 }

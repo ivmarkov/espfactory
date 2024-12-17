@@ -153,15 +153,21 @@ where
 
     fn log(&mut self, record: &Record) -> io::Result<()> {
         if self.level >= record.level() {
-            let message = format!("[{}] {}", record.level(), record.args());
-
             if let Some(out) = self.out.as_mut() {
+                let message = format!(
+                    "[{} {} {}] {}",
+                    record.level(),
+                    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ"),
+                    record.target(),
+                    record.args()
+                );
+
                 out.write_all(message.as_bytes())?;
                 out.write_all(b"\n")?;
             }
 
             if self.last_n_level >= record.level() {
-                for line in message.lines() {
+                for line in format!("{}", record.args()).lines() {
                     self.push(LogLine {
                         level: record.level(),
                         message: line.to_string(),

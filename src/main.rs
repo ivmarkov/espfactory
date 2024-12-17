@@ -212,6 +212,8 @@ fn main() -> anyhow::Result<()> {
 
         LOGGER.lock().set_level(args.verbosity.log_level());
 
+        std::env::set_var("RUST_LIB_BACKTRACE", "1");
+
         futures_lite::future::block_on(espfactory::run(&conf.to_lib_config(), bundle_dir, loader))?;
     }
 
