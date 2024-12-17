@@ -51,7 +51,7 @@ impl<'a> Input<'a> {
 
     /// Swallows all key presses
     #[allow(unused)]
-    pub async fn swallow(&self) {
+    pub async fn swallow(&self) -> ! {
         loop {
             self.get().await;
         }
