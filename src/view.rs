@@ -387,7 +387,14 @@ fn render_main<'a>(
 
     let area = layout[1];
 
-    for (index, line) in LOGGER.lock().last_n(area.height as usize).enumerate() {
+    let lines = LOGGER.lock(|logger| {
+        logger
+            .last_n(area.height as usize)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+
+    for (index, line) in lines.iter().enumerate() {
         let level = Span::from(format!("[{}] ", line.level.as_str()));
 
         let level = match line.level {

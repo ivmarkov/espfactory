@@ -210,7 +210,7 @@ fn main() -> anyhow::Result<()> {
 
         let bundle_dir = &project_dirs.cache_dir().join("bundle");
 
-        LOGGER.lock().set_level(args.verbosity.log_level());
+        LOGGER.lock(|logger| logger.set_level(args.verbosity.log_level()));
 
         std::env::set_var("RUST_LIB_BACKTRACE", "1");
 

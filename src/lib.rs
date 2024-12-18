@@ -104,9 +104,9 @@ where
 
     let model = Arc::new(Model::new(signal.clone()));
 
-    LOGGER.lock().swap_signal(Some(signal));
+    LOGGER.swap_signal(Some(signal));
     let _guard = scopeguard::guard((), |_| {
-        LOGGER.lock().swap_signal(None);
+        LOGGER.swap_signal(None);
     });
 
     let result = select(

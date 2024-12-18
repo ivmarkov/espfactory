@@ -1,6 +1,6 @@
 use std::fs::File;
-use std::io::{self, Write};
-use std::sync::{Mutex, MutexGuard};
+use std::io::Write;
+use std::sync::Mutex;
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
@@ -19,14 +19,14 @@ pub static LOGGER: Logger<File, Arc<Signal<CriticalSectionRawMutex, ()>>> =
 /// A trait for signaling that a log message has been written
 pub trait LogSignal {
     /// Signal that a log message has been written
-    fn signal(&mut self);
+    fn signal(&self);
 }
 
-impl<T> LogSignal for &mut T
+impl<T> LogSignal for &T
 where
     T: LogSignal,
 {
-    fn signal(&mut self) {
+    fn signal(&self) {
         (**self).signal();
     }
 }
@@ -35,7 +35,7 @@ impl<T> LogSignal for Arc<Signal<T, ()>>
 where
     T: RawMutex + Send,
 {
-    fn signal(&mut self) {
+    fn signal(&self) {
         self.as_ref().signal(());
     }
 }
@@ -47,7 +47,8 @@ where
 /// - Keeps the last N log lines in a memory buffer (for rendering in the UI)
 /// - Signals when a log message has been written
 pub struct Logger<T, S> {
-    inner: Mutex<LoggerState<T, S>>,
+    inner: Mutex<LoggerState<T>>,
+    signal: Mutex<Option<S>>,
 }
 
 impl<T, S> Logger<T, S>
@@ -69,14 +70,37 @@ where
                 last_n_len,
                 last_n_level,
                 out: None,
-                signal: None,
             }),
+            signal: Mutex::new(None),
         }
     }
 
-    /// Locks the logger and
-    pub fn lock(&self) -> MutexGuard<LoggerState<T, S>> {
-        self.inner.lock().unwrap()
+    /// Swaps the existing signal used by the logger (if any) with the provided one
+    /// The signal will be called any time a log message is written
+    ///
+    /// Returns the previous signal, if any
+    ///
+    /// # Arguments
+    /// - `signal` - the new signal to use or `None` to remove the existing signal
+    pub fn swap_signal(&self, signal: Option<S>) -> Option<S> {
+        let mut guard = self.signal.lock().unwrap();
+
+        core::mem::replace(&mut guard, signal)
+    }
+
+    /// Locks the logger and returns a guard to the logger state
+    ///
+    /// The logger is locked only if it is not already locked by the current thread
+    ///
+    /// Returns `None` if the logger is already locked by the current thread
+    /// or `Some` with a guard to the logger state otherwise
+    pub fn lock<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut LoggerState<T>) -> R,
+    {
+        let mut guard = self.inner.lock().unwrap();
+
+        f(&mut guard)
     }
 }
 
@@ -90,7 +114,14 @@ where
     }
 
     fn log(&self, record: &Record) {
-        self.lock().log(record).unwrap();
+        self.lock(|logger| logger.log(record));
+
+        {
+            let signal = self.signal.lock().unwrap();
+            if let Some(signal) = signal.as_ref() {
+                signal.signal();
+            }
+        }
     }
 
     fn flush(&self) {
@@ -99,34 +130,21 @@ where
 }
 
 /// The state of a `Logger` instance
-pub struct LoggerState<T, S> {
+pub struct LoggerState<T> {
     level: LevelFilter,
     last_n: VecDeque<LogLine>,
     last_n_len: usize,
     last_n_level: LevelFilter,
     out: Option<T>,
-    signal: Option<S>,
 }
 
-impl<T, S> LoggerState<T, S>
+impl<T> LoggerState<T>
 where
     T: Write,
-    S: LogSignal,
 {
     /// Set the log level to use overall
     pub fn set_level(&mut self, level: LevelFilter) {
         self.level = level;
-    }
-
-    /// Swaps the existing signal used by the logger (if any) with the provided one
-    /// The signal will be called any time a log message is written
-    ///
-    /// Returns the previous signal, if any
-    ///
-    /// # Arguments
-    /// - `signal` - the new signal to use or `None` to remove the existing signal
-    pub fn swap_signal(&mut self, signal: Option<S>) -> Option<S> {
-        core::mem::replace(&mut self.signal, signal)
     }
 
     /// Swaps the existing output used by the logger (if any) with the provided one
@@ -151,7 +169,7 @@ where
         })
     }
 
-    fn log(&mut self, record: &Record) -> io::Result<()> {
+    fn log(&mut self, record: &Record) {
         if self.level >= record.level() {
             if let Some(out) = self.out.as_mut() {
                 let message = format!(
@@ -162,8 +180,8 @@ where
                     record.args()
                 );
 
-                out.write_all(message.as_bytes())?;
-                out.write_all(b"\n")?;
+                let _ = out.write_all(message.as_bytes());
+                let _ = out.write_all(b"\n");
             }
 
             if self.last_n_level >= record.level() {
@@ -174,13 +192,7 @@ where
                     });
                 }
             }
-
-            if let Some(signal) = self.signal.as_mut() {
-                signal.signal();
-            }
         }
-
-        Ok(())
     }
 
     fn push(&mut self, msg: LogLine) {

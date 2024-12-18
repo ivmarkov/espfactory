@@ -17,7 +17,7 @@ use espflash::flasher::{FlashSettings, FlashSize, Flasher, ProgressCallbacks};
 use espflash::image_format::IdfBootloaderFormat;
 use espflash::targets::XtalFrequency;
 
-use log::{debug, error};
+use log::{error, info, warn};
 
 use serialport::{FlowControl, SerialPortInfo, SerialPortType, UsbPortInfo};
 
@@ -74,7 +74,7 @@ pub fn elf2bin(elf_data: &[u8], chip: Chip) -> anyhow::Result<Vec<u8>> {
 }
 
 pub async fn flash<P>(
-    port: &str,
+    port: Option<&str>,
     chip: Chip,
     speed: Option<u32>,
     flash_size: Option<FlashSize>,
@@ -87,12 +87,12 @@ where
     let finished = Arc::new(Signal::<CriticalSectionRawMutex, ()>::new());
 
     let handle = {
-        let port = port.to_string();
+        let port = port.map(str::to_string);
         let finished = finished.clone();
 
         std::thread::spawn(move || {
             let result = (|| {
-                let mut flasher = new(&port, chip, speed)?;
+                let mut flasher = new(port.as_deref(), chip, speed)?;
 
                 if let Some(flash_size) = flash_size {
                     flasher.set_flash_size(flash_size);
@@ -142,7 +142,7 @@ where
     handle.join().unwrap()
 }
 
-fn new(port: &str, chip: Chip, speed: Option<u32>) -> anyhow::Result<Flasher> {
+fn new(port: Option<&str>, chip: Chip, speed: Option<u32>) -> anyhow::Result<Flasher> {
     let port_info = get_serial_port_info(port)?;
 
     let serial_port = serialport::new(port_info.port_name, 112500)
@@ -155,7 +155,7 @@ fn new(port: &str, chip: Chip, speed: Option<u32>) -> anyhow::Result<Flasher> {
     let port_info = match port_info.port_type {
         SerialPortType::UsbPort(info) => info,
         SerialPortType::PciPort | SerialPortType::Unknown => {
-            debug!("Matched `SerialPortType::PciPort or ::Unknown`");
+            warn!("Matched `SerialPortType::PciPort or ::Unknown`");
             UsbPortInfo {
                 vid: 0,
                 pid: 0,
@@ -211,8 +211,8 @@ fn bootloader_format<'a>(
 
 /// Return the information of a serial port taking into account the different
 /// ways of choosing a port.
-fn get_serial_port_info(serial: &str) -> anyhow::Result<SerialPortInfo> {
-    let ports = detect_usb_serial_ports(true).unwrap_or_default();
+fn get_serial_port_info(serial: Option<&str>) -> anyhow::Result<SerialPortInfo> {
+    let ports = detect_usb_serial_ports(false).unwrap_or_default();
     find_serial_port(&ports, serial)
 }
 
@@ -243,35 +243,62 @@ fn detect_usb_serial_ports(list_all_ports: bool) -> anyhow::Result<Vec<SerialPor
 
 /// Given a vector of `SerialPortInfo` structs, attempt to find and return one
 /// whose `port_name` field matches the provided `name` argument.
-fn find_serial_port(ports: &[SerialPortInfo], name: &str) -> anyhow::Result<SerialPortInfo> {
-    #[cfg(not(target_os = "windows"))]
-    let name = fs::canonicalize(name).with_context(|| format!("Port {name} not found"))?;
-    #[cfg(not(target_os = "windows"))]
-    let name = name.to_string_lossy();
+fn find_serial_port(
+    ports: &[SerialPortInfo],
+    name: Option<&str>,
+) -> anyhow::Result<SerialPortInfo> {
+    if let Some(name) = name {
+        info!("Finding serial port {name}");
 
-    // The case in device paths matters in BSD!
-    #[cfg(any(
-        target_os = "freebsd",
-        target_os = "dragonfly",
-        target_os = "openbsd",
-        target_os = "netbsd"
-    ))]
-    let port_info = ports.iter().find(|port| port.port_name == name);
+        #[cfg(not(target_os = "windows"))]
+        let name = fs::canonicalize(name).with_context(|| format!("Port {name} not found"))?;
+        #[cfg(not(target_os = "windows"))]
+        let name = name.to_string_lossy();
 
-    // On Windows and other *nix systems, the case is not important.
-    #[cfg(not(any(
-        target_os = "freebsd",
-        target_os = "dragonfly",
-        target_os = "openbsd",
-        target_os = "netbsd"
-    )))]
-    let port_info = ports
-        .iter()
-        .find(|port| port.port_name.eq_ignore_ascii_case(name.as_ref()));
+        // The case in device paths matters in BSD!
+        #[cfg(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        ))]
+        let port_info = ports.iter().find(|port| port.port_name == name);
 
-    if let Some(port) = port_info {
-        Ok(port.to_owned())
+        // On Windows and other *nix systems, the case is not important.
+        #[cfg(not(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        )))]
+        let port_info = ports
+            .iter()
+            .find(|port| port.port_name.eq_ignore_ascii_case(name.as_ref()));
+
+        if let Some(port) = port_info {
+            info!("Serial port {name} found");
+
+            Ok(port.to_owned())
+        } else {
+            anyhow::bail!("Serial port not found: {}", name)
+        }
     } else {
-        anyhow::bail!("Serial port not found: {}", name)
+        info!("Detecting serial port...");
+
+        if ports.is_empty() {
+            anyhow::bail!("No serial ports found")
+        }
+
+        info!(
+            "Using the first available serial port `{}` from [{}]",
+            ports[0].port_name,
+            ports
+                .iter()
+                .map(|port| port.port_name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        Ok(ports[0].to_owned())
     }
 }

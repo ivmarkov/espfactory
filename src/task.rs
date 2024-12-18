@@ -437,7 +437,7 @@ where
         flash::flash(
             self.conf.port.as_deref(),
             chip,
-            Some(115200), // TODO
+            Some(921600), // TODO
             flash_size,
             flash_data,
             FlashProgress::new(self.model.clone()),

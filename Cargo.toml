@@ -32,10 +32,11 @@ futures-lite = "2"
 zip = { version = "2", default-features = false, features = ["deflate", "deflate-flate2"] }
 anyhow = "1"
 esp-idf-part = "0.5"
-espflash = { version = "3", features = ["cli"] }
+espflash = { version = "3.2", features = ["cli"] }
 #esptools = { git = "http://github.com/ivmarkov/esptools" }
 serialport = "4.6"
 log = "0.4"
+thread_local = "1.1"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
