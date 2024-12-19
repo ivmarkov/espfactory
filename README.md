@@ -55,7 +55,6 @@ cargo zigbuild --target aarch64-unknown-linux-gnu # rPI 4+
 
 ```sh
 cargo install cargo-xwin
-pip3 install cargo-xwin
 cargo xwin build --target x86_64-pc-windows-msvc
 ```
 
