@@ -203,7 +203,11 @@ impl BundleLoader for S3Loader {
             }
         }
 
-        anyhow::bail!("No bundles found in the bucket")
+        if let Some(id) = id {
+            anyhow::bail!("No bundle found for ID `{id}`")
+        } else {
+            anyhow::bail!("No bundles found in the bucket")
+        }
     }
 }
 

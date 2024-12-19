@@ -203,7 +203,7 @@ fn main() -> anyhow::Result<()> {
             test_jig_id_readout: Some(true),
             pcb_id_readout: Some(true),
             box_id_readout: Some(true),
-            skip_confirmations: Some(true),
+            skip_confirmations: Some(false),
         }
     };
 

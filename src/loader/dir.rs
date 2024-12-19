@@ -111,7 +111,7 @@ impl BundleLoader for DirLoader {
             // TODO
             Ok(path.file_name().unwrap().to_str().unwrap().to_string())
         } else if let Some(id) = id {
-            anyhow::bail!("No bundle found for ID `{}`", id)
+            anyhow::bail!("No bundle found for ID `{id}`")
         } else {
             anyhow::bail!("No files found in bundles' directory")
         }
