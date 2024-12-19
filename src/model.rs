@@ -75,22 +75,89 @@ impl Model {
 /// The state of the model
 #[derive(Debug)]
 pub enum State {
-    /// The model is awaiting eFuse readouts
-    PreparingEfuseReadouts(Preparing),
-    /// The model failed to prepare the eFuse readouts
-    PreparingEfuseReadoutsFailed(Status),
-    /// The model is awaiting user readouts
-    Readouts(Readouts),
-    /// The model is preparing a bundle
-    Preparing(Preparing),
-    /// The model failed to prepare the bundle
-    PreparingFailed(Status),
-    /// The model has prepared the bundle
-    Prepared(Prepared),
-    /// The model is provisioning the bundle
-    Provisioning(Provisioning),
-    /// Priovisioning the bundle has finished
-    ProvisioningOutcome(Status),
+    /// The model is presenting the eFuse readouts and awaiting user readouts
+    Readout(Readout),
+    /// The model has prepared the bundle and is either waiting for user confirmation or provisioning it already
+    Provision(Provision),
+    /// The model is processing a task
+    Processing(Processing),
+    /// The model needs to present the outcome of a task (success or failure)
+    Status(Status),
+}
+
+impl State {
+    /// Create a new state in the `Processing` state
+    pub const fn new() -> Self {
+        Self::Processing(Processing::new())
+    }
+
+    pub fn success(&mut self, title: impl Into<String>, message: impl Into<String>) {
+        *self = Self::Status(Status::success(title, message));
+    }
+
+    pub fn error(&mut self, title: impl Into<String>, message: impl Into<String>) {
+        *self = Self::Status(Status::error(title, message));
+    }
+
+    /// Get a reference to the readout from the state
+    /// Panics if the state is not `Readout`
+    pub fn readout(&self) -> &Readout {
+        if let Self::Readout(readouts) = self {
+            readouts
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
+    }
+
+    /// Get a mutable reference to the readout from the state
+    /// Panics if the state is not `Readout`
+    pub fn readout_mut(&mut self) -> &mut Readout {
+        if let Self::Readout(readouts) = self {
+            readouts
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
+    }
+
+    /// Get a reference to the provision state
+    /// Panics if the state is not `Provision`
+    pub fn provision(&self) -> &Provision {
+        if let Self::Provision(prepared) = self {
+            prepared
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
+    }
+
+    /// Get a mutable reference to the provision state
+    /// Panics if the state is not `Provision`
+    pub fn provision_mut(&mut self) -> &mut Provision {
+        if let Self::Provision(prepared) = self {
+            prepared
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
+    }
+
+    /// Get a mutable reference to the processing state
+    /// Panics if the state is not `Processing`
+    pub fn processing_mut(&mut self) -> &mut Processing {
+        if let Self::Processing(processing) = self {
+            processing
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
+    }
+
+    /// Get a mutable reference to the status state
+    /// Panics if the state is not `Status`
+    pub fn status_mut(&mut self) -> &mut Status {
+        if let Self::Status(status) = self {
+            status
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
+    }
 }
 
 impl Default for State {
@@ -99,104 +166,9 @@ impl Default for State {
     }
 }
 
-impl State {
-    /// Create a new state in the `PreparingEfuseReadouts` state
-    pub const fn new() -> Self {
-        Self::PreparingEfuseReadouts(Preparing::new())
-    }
-
-    pub fn preparing_efuse_mut(&mut self) -> &mut Preparing {
-        if let Self::PreparingEfuseReadouts(preparing) = self {
-            preparing
-        } else {
-            panic!("Unexpected state: {self:?}")
-        }
-    }
-
-    /// Get a reference to the readouts from the state
-    /// Panics if the state is not `Readouts`
-    pub fn readouts(&self) -> &Readouts {
-        if let Self::Readouts(readouts) = self {
-            readouts
-        } else {
-            panic!("Unexpected state: {self:?}")
-        }
-    }
-
-    /// Get a mutable reference to the readouts from the state
-    /// Panics if the state is not `Readouts`
-    pub fn readouts_mut(&mut self) -> &mut Readouts {
-        if let Self::Readouts(readouts) = self {
-            readouts
-        } else {
-            panic!("Unexpected state: {self:?}")
-        }
-    }
-
-    /// Get a mutable reference to the preparing state
-    /// Panics if the state is not `Preparing`
-    pub fn preparing_mut(&mut self) -> &mut Preparing {
-        if let Self::Preparing(preparing) = self {
-            preparing
-        } else {
-            panic!("Unexpected state: {self:?}")
-        }
-    }
-
-    /// Get a mutable reference to the preparing failed state
-    /// Panics if the state is not `PreparingFailed`
-    pub fn preparing_failed_mut(&mut self) -> &mut Status {
-        if let Self::PreparingFailed(status) = self {
-            status
-        } else {
-            panic!("Unexpected state: {self:?}")
-        }
-    }
-
-    /// Get a mutable reference to the prepared state
-    /// Panics if the state is not `Prepared`
-    pub fn prepared_mut(&mut self) -> &mut Prepared {
-        if let Self::Prepared(prepared) = self {
-            prepared
-        } else {
-            panic!("Unexpected state: {self:?}")
-        }
-    }
-
-    /// Get a reference to the provisioning state
-    /// Panics if the state is not `Provisioning`
-    pub fn provisioning(&self) -> &Provisioning {
-        if let Self::Provisioning(provisioning) = self {
-            provisioning
-        } else {
-            panic!("Unexpected state: {self:?}")
-        }
-    }
-
-    /// Get a mutable reference to the provisioning state
-    /// Panics if the state is not `Provisioning`
-    pub fn provisioning_mut(&mut self) -> &mut Provisioning {
-        if let Self::Provisioning(provisioning) = self {
-            provisioning
-        } else {
-            panic!("Unexpected state: {self:?}")
-        }
-    }
-
-    /// Get a mutable reference to the provisioned state
-    /// Panics if the state is not `ProvisioningOutcome`
-    pub fn provisioning_outcome_mut(&mut self) -> &mut Status {
-        if let Self::ProvisioningOutcome(outcome) = self {
-            outcome
-        } else {
-            panic!("Unexpected state: {self:?}")
-        }
-    }
-}
-
 /// The readouts state of the model
 #[derive(Debug)]
-pub struct Readouts {
+pub struct Readout {
     /// The eFuse readouts to display
     /// Each readout is a tuple of the eFuse key and its stringified value
     pub efuse_readouts: Vec<(String, String)>,
@@ -209,7 +181,7 @@ pub struct Readouts {
     pub active: usize,
 }
 
-impl Readouts {
+impl Readout {
     /// Create a new `Readouts` state with no readouts
     pub const fn new() -> Self {
         Self::new_with_efuse(Vec::new())
@@ -230,22 +202,34 @@ impl Readouts {
     }
 }
 
-impl Default for Readouts {
+impl Default for Readout {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// The state of the model when preparing the bundle
+/// The state of the model when the bundle is ready to be provisioned or in the process of being provisioned
+/// (i.e. flashed and efused)
 #[derive(Debug)]
-pub struct Preparing {
-    /// The status of the preparation (e.g. "Loading", etc.)
+pub struct Provision {
+    /// The prepared bundle
+    pub bundle: Bundle,
+    /// TBD
+    pub efuses_status: HashMap<String, ProvisioningStatus>,
+    /// Whether the bundle is being provisioned (flashed and efused)
+    pub provisioning: bool,
+}
+
+/// The state of the model when processing a sub-task
+#[derive(Debug)]
+pub struct Processing {
+    /// The status of the processing (e.g. "Loading", etc.)
     pub status: String,
-    /// A counter helper for displaying a preparation progress
+    /// A counter helper for displaying a processing progress
     pub counter: Wrapping<usize>,
 }
 
-impl Preparing {
+impl Processing {
     /// Create a new `Preparing` state with empty status
     pub const fn new() -> Self {
         Self {
@@ -255,32 +239,37 @@ impl Preparing {
     }
 }
 
-impl Default for Preparing {
+impl Default for Processing {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// The state of the model when the bundle is prepared
-/// The bundle is ready to be flashed and efused
-#[derive(Debug)]
-pub struct Prepared {
-    /// The prepared bundle
-    pub bundle: Bundle,
-}
-
-/// The state of the model when the bundle is being provisioned (flashed and efused)
-#[derive(Debug)]
-pub struct Provisioning {
-    /// The prepared bundle
-    pub bundle: Bundle,
-    /// TBD
-    pub efuses_status: HashMap<String, ProvisioningStatus>,
-}
-
+/// The state of the model when presenting a status message
+///
+/// The status message is either an error or a success message
 #[derive(Debug)]
 pub struct Status {
     pub title: String,
     pub message: String,
     pub error: bool,
+}
+
+impl Status {
+    pub fn success(title: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::new(title, message, false)
+    }
+
+    pub fn error(title: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::new(title, message, true)
+    }
+
+    /// Create a new `Status` state with the given title and message
+    pub fn new(title: impl Into<String>, message: impl Into<String>, error: bool) -> Self {
+        Self {
+            title: title.into(),
+            message: message.into(),
+            error,
+        }
+    }
 }

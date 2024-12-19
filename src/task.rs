@@ -1,3 +1,6 @@
+use core::future::Future;
+
+use std::collections::HashMap;
 use std::fs::{self, DirEntry, File};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -18,7 +21,7 @@ use log::{error, info};
 use crate::bundle::{Bundle, Params, ProvisioningStatus};
 use crate::input::Input;
 use crate::loader::BundleLoader;
-use crate::model::{Model, Prepared, Preparing, Provisioning, Readouts, State, Status};
+use crate::model::{Model, Processing, Provision, Readout, State, Status};
 use crate::utils::futures::{unblock, Coalesce, IntoFallibleFuture};
 use crate::{efuse, flash};
 use crate::{BundleIdentification, Config};
@@ -81,11 +84,10 @@ where
                     error!("Preparing eFuse readouts failed: {err:?}");
 
                     self.model.modify(|state| {
-                        *state = State::PreparingEfuseReadoutsFailed(Status {
-                            title: " Preparing eFuse readouts failed ".to_string(),
-                            message: format!("Preparing eFuse readouts failed: {err:?}"),
-                            error: true,
-                        });
+                        state.error(
+                            " Preparing eFuse readouts failed ",
+                            format!("Preparing eFuse readouts failed: {err:?}"),
+                        )
                     });
 
                     if !input.wait_quit_or(KeyCode::Enter).await {
@@ -105,11 +107,10 @@ where
                         error!("Preparing a bundle failed: {err:?}");
 
                         self.model.modify(|state| {
-                            *state = State::ProvisioningOutcome(Status {
-                                title: " Preparing a bundle failed ".to_string(),
-                                message: format!("Preparing a bundle failed: {err:?}"),
-                                error: true,
-                            });
+                            state.error(
+                                " Preparing a bundle failed ",
+                                format!("Preparing a bundle failed: {err:?}"),
+                            )
                         });
 
                         if !input.wait_quit_or(KeyCode::Enter).await {
@@ -136,18 +137,16 @@ where
                         self.model.modify(|state| {
                             let prev_state = core::mem::replace(
                                 state,
-                                State::ProvisioningOutcome(Status {
-                                    title: format!(
+                                State::Status(Status::error(
+                                    format!(
                                         " Provisioning {} failed ",
-                                        state.provisioning().bundle.name
+                                        state.provision().bundle.name
                                     ),
-                                    message: format!("Provisioning the bundle failed: {err:?}"),
-                                    error: true,
-                                }),
+                                    format!("Provisioning the bundle failed: {err:?}"),
+                                )),
                             );
 
-                            let State::Provisioning(Provisioning { bundle, .. }) = prev_state
-                            else {
+                            let State::Provision(Provision { bundle, .. }) = prev_state else {
                                 unreachable!();
                             };
 
@@ -159,8 +158,10 @@ where
                         }
 
                         self.model.modify(|state| {
-                            *state = State::Prepared(Prepared {
+                            *state = State::Provision(Provision {
                                 bundle: prepared_bundle.unwrap(),
+                                efuses_status: HashMap::new(), // TODO
+                                provisioning: false,
                             });
                         });
                     }
@@ -178,7 +179,7 @@ where
     /// Process the readouts state by visualizing the eFuse readouts (if any) and
     /// reading the necessary IDs from the user (if any)
     async fn readout(&mut self, input: &mut Input<'_>) -> bool {
-        let init = |readouts: &mut Readouts| {
+        let init = |readouts: &mut Readout| {
             readouts.readouts.clear();
             readouts.active = 0;
 
@@ -202,17 +203,17 @@ where
         };
 
         self.model.modify(|state| {
-            let readouts = state.readouts_mut();
+            let readouts = state.readout_mut();
             init(readouts);
         });
 
-        while !self.model.get(|state| state.readouts().is_ready()) {
+        while !self.model.get(|state| state.readout().is_ready()) {
             let key = input.get().await;
 
             let mut quit = false;
 
             self.model.maybe_modify(|state| {
-                let readouts = state.readouts_mut();
+                let readouts = state.readout_mut();
 
                 let readout = &mut readouts.readouts[readouts.active];
 
@@ -261,30 +262,15 @@ where
     /// Displays a progress info while reading the eFuse values
     async fn prepare_efuse_readouts(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         self.model
-            .modify(|state| *state = State::PreparingEfuseReadouts(Preparing::new()));
+            .modify(|state| *state = State::Processing(Processing::new()));
 
-        let model = self.model.clone();
-
-        select3(
-            Self::tick(Duration::from_millis(100), || {
-                model.modify(|state| {
-                    if let State::PreparingEfuseReadouts(Preparing { counter, .. }) = state {
-                        *counter += 1;
-                    }
-                })
-            })
-            .into_fallible(),
-            input.wait_quit().into_fallible(),
-            self.prep_efuse_readouts(),
-        )
-        .coalesce()
-        .await
+        Self::process(&self.model.clone(), self.prep_efuse_readouts(), input).await
     }
 
     /// Prepare the bundle to be provisioned by loading it from the storage
     async fn prepare(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         let (_test_jig_id, pcb_id, box_id) = self.model.get(|state| {
-            let readouts = state.readouts();
+            let readouts = state.readout();
             let mut offset = 0;
 
             let test_jig_id = if self.conf.test_jig_id_readout {
@@ -318,9 +304,7 @@ where
         });
 
         self.model
-            .modify(|state| *state = State::Preparing(Preparing::new()));
-
-        let model = self.model.clone();
+            .modify(|state| *state = State::Processing(Processing::new()));
 
         let bundle_id = match self.conf.bundle_identification {
             BundleIdentification::None => None,
@@ -328,19 +312,11 @@ where
             BundleIdentification::BoxId => box_id,
         };
 
-        select3(
-            Self::tick(Duration::from_millis(100), || {
-                model.modify(|state| {
-                    if let State::Preparing(Preparing { counter, .. }) = state {
-                        *counter += 1;
-                    }
-                })
-            })
-            .into_fallible(),
-            input.wait_quit().into_fallible(),
+        Self::process(
+            &self.model.clone(),
             self.prep_bundle(bundle_id.as_deref()),
+            input,
         )
-        .coalesce()
         .await
     }
 
@@ -348,7 +324,7 @@ where
     async fn load_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<PathBuf> {
         let bundle = loop {
             self.model.modify(|state| {
-                state.preparing_mut().status = "Checking".into();
+                state.processing_mut().status = "Checking".into();
             });
 
             if bundle_id.is_none() {
@@ -376,7 +352,7 @@ where
             }
 
             self.model.modify(|state| {
-                state.preparing_mut().status = "Fetching".into();
+                state.processing_mut().status = "Fetching".into();
             });
 
             let mut bundle_temp_path = self
@@ -447,7 +423,7 @@ where
         ];
 
         self.model.modify(|state| {
-            state.preparing_efuse_mut().status = "Reading Chip IDs from eFuse".to_string();
+            state.processing_mut().status = "Reading Chip IDs from eFuse".to_string();
         });
 
         info!("About to read Chip IDs from eFuse");
@@ -478,7 +454,7 @@ where
         }
 
         self.model
-            .modify(move |state| *state = State::Readouts(Readouts::new_with_efuse(efuse_values)));
+            .modify(move |state| *state = State::Readout(Readout::new_with_efuse(efuse_values)));
 
         Ok(())
     }
@@ -496,7 +472,7 @@ where
             .to_string(); // TODO
 
         self.model.modify(|state| {
-            state.preparing_mut().status = format!("Processing {bundle_name}");
+            state.processing_mut().status = format!("Processing {bundle_name}");
         });
 
         info!("About to prep bundle file `{}`", bundle_path.display());
@@ -506,8 +482,13 @@ where
 
         let bundle = Bundle::create(bundle_name, Params::default(), &mut bundle_file)?;
 
-        self.model
-            .modify(move |state| *state = State::Prepared(Prepared { bundle }));
+        self.model.modify(move |state| {
+            *state = State::Provision(Provision {
+                bundle,
+                efuses_status: HashMap::new(),
+                provisioning: false,
+            })
+        });
 
         Ok(())
     }
@@ -521,19 +502,16 @@ where
 
     async fn prov_bundle(&mut self) -> anyhow::Result<()> {
         self.model.modify(|state| {
-            *state = State::Provisioning(Provisioning {
-                bundle: state.prepared_mut().bundle.clone(),
-                efuses_status: Default::default(),
-            });
+            let ps = state.provision_mut();
+            ps.provisioning = true;
 
-            let ps = state.provisioning_mut();
             info!("About to provision bundle `{}`", ps.bundle.name);
 
             ps.bundle.set_status_all(ProvisioningStatus::Pending);
         });
 
         let (chip, flash_size, flash_data) = self.model.get(|state| {
-            let ps = state.provisioning();
+            let ps = state.provision();
 
             (
                 ps.bundle.params.chip,
@@ -577,17 +555,36 @@ where
         self.model.modify(|state| {
             info!(
                 "Provisioning bundle `{}` complete",
-                state.provisioning().bundle.name
+                state.provision().bundle.name
             );
 
-            *state = State::ProvisioningOutcome(Status {
-                title: format!(" {} ", state.provisioning().bundle.name),
-                message: "Provisioning complete.".to_string(),
-                error: false,
-            });
+            state.success(
+                format!(" {} ", state.provision().bundle.name),
+                "Provisioning complete.",
+            );
         });
 
         Ok(())
+    }
+
+    async fn process<F>(model: &Model, fut: F, input: &mut Input<'_>) -> anyhow::Result<()>
+    where
+        F: Future<Output = anyhow::Result<()>>,
+    {
+        select3(
+            Self::tick(Duration::from_millis(100), || {
+                model.modify(|state| {
+                    if let State::Processing(Processing { counter, .. }) = state {
+                        *counter += 1;
+                    }
+                })
+            })
+            .into_fallible(),
+            input.wait_quit().into_fallible(),
+            fut,
+        )
+        .coalesce()
+        .await
     }
 
     async fn tick<F>(duration: Duration, mut f: F)
@@ -624,7 +621,7 @@ impl ProgressCallbacks for FlashProgress {
 
         self.model.maybe_modify(|state| {
             state
-                .provisioning_mut()
+                .provision_mut()
                 .bundle
                 .set_status(addr, ProvisioningStatus::InProgress(0))
         });
@@ -633,7 +630,7 @@ impl ProgressCallbacks for FlashProgress {
     fn update(&mut self, current: usize) {
         if let Some((addr, total)) = *self.image.lock().unwrap() {
             self.model.maybe_modify(|state| {
-                state.provisioning_mut().bundle.set_status(
+                state.provision_mut().bundle.set_status(
                     addr,
                     ProvisioningStatus::InProgress((current * 100 / total) as u8),
                 )
@@ -645,7 +642,7 @@ impl ProgressCallbacks for FlashProgress {
         if let Some((addr, _)) = self.image.lock().unwrap().take() {
             self.model.maybe_modify(|state| {
                 state
-                    .provisioning_mut()
+                    .provision_mut()
                     .bundle
                     .set_status(addr, ProvisioningStatus::Done)
             });

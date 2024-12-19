@@ -9,7 +9,7 @@ use ratatui::DefaultTerminal;
 
 use crate::bundle::{Bundle, ProvisioningStatus};
 use crate::logger::LOGGER;
-use crate::model::{Model, Prepared, Preparing, Provisioning, Readouts, State, Status};
+use crate::model::{Model, Processing, Provision, Readout, State, Status};
 
 /// The view (UI) of the application
 ///
@@ -43,19 +43,15 @@ impl<'a, 'b> View<'a, 'b> {
 impl Widget for &State {
     fn render(self, area: Rect, buf: &mut Buffer) {
         match self {
-            State::PreparingEfuseReadouts(readouts) => readouts.render(area, buf),
-            State::PreparingEfuseReadoutsFailed(failure) => failure.render(area, buf),
-            State::Readouts(readouts) => readouts.render(area, buf),
-            State::Preparing(searching) => searching.render(area, buf),
-            State::PreparingFailed(failure) => failure.render(area, buf),
-            State::Prepared(loaded) => loaded.render(area, buf),
-            State::Provisioning(provisioning) => provisioning.render(area, buf),
-            State::ProvisioningOutcome(outcome) => outcome.render(area, buf),
+            State::Readout(readouts) => readouts.render(area, buf),
+            State::Provision(loaded) => loaded.render(area, buf),
+            State::Processing(processing) => processing.render(area, buf),
+            State::Status(status) => status.render(area, buf),
         }
     }
 }
 
-impl Widget for &Readouts {
+impl Widget for &Readout {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = render_main(
             Some(" Readouts ".bold()),
@@ -143,91 +139,7 @@ impl Widget for &Readouts {
     }
 }
 
-impl Widget for &Preparing {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = render_main(
-            Some(Span::from(" Bundle Preparation ").bold()),
-            Some(Line::from(vec![" Quit ".into(), "<Esc> ".yellow().bold()])),
-            area,
-            buf,
-        );
-
-        const PROGRESS: &[char] = &['-', '\\', '|', '/'];
-
-        let counter_text = Text::from(format!(
-            "{}... {}",
-            if self.status.is_empty() {
-                "Preparing".into()
-            } else {
-                self.status.clone()
-            },
-            PROGRESS[self.counter.0 % 4]
-        ))
-        .bold();
-
-        Paragraph::new(counter_text)
-            .left_aligned()
-            .render(area.inner(Margin::new(2, 2)), buf);
-    }
-}
-
-impl Widget for &Prepared {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let pb = ProvisionedBundle {
-            bundle: &self.bundle,
-            provisioning: false,
-        };
-
-        pb.render(area, buf);
-    }
-}
-
-impl Widget for &Provisioning {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let pb = ProvisionedBundle {
-            bundle: &self.bundle,
-            provisioning: true,
-        };
-
-        pb.render(area, buf);
-    }
-}
-
-impl Widget for &Status {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = render_main(
-            Some(self.title.clone().bold()),
-            Some(if self.error {
-                Line::from(vec![
-                    " Re-try ".into(),
-                    "<Enter> ".yellow().bold(),
-                    "Quit ".into(),
-                    "<Esc> ".yellow().bold(),
-                ])
-            } else {
-                Line::from(vec![" Continue ".into(), "<Enter> ".yellow().bold()])
-            }),
-            area,
-            buf,
-        );
-
-        let mut para = Paragraph::new(self.message.clone()).bold();
-
-        if self.error {
-            para = para.yellow();
-        }
-
-        para.render(area.inner(Margin::new(2, 4)), buf);
-    }
-}
-
-#[derive(Debug)]
-struct ProvisionedBundle<'a> {
-    bundle: &'a Bundle,
-    provisioning: bool,
-}
-
-impl ProvisionedBundle<'_> {
+impl Provision {
     fn mark_available(mut row: Row<'_>, status: Option<ProvisioningStatus>) -> Row<'_> {
         if let Some(status) = status {
             row = row.bold();
@@ -267,7 +179,7 @@ impl ProvisionedBundle<'_> {
     }
 }
 
-impl Widget for &ProvisionedBundle<'_> {
+impl Widget for &Provision {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = render_main(
             Some(Line::from(vec![
@@ -308,7 +220,7 @@ impl Widget for &ProvisionedBundle<'_> {
         Table::new(
             self.bundle.parts_mapping.iter().map(|mapping| {
                 let row = Row::new::<Vec<Cell>>(vec![
-                    ProvisionedBundle::active_string(mapping.status()).into(),
+                    Provision::active_string(mapping.status()).into(),
                     mapping.partition.name().into(),
                     if matches!(
                         mapping.partition.name().as_str(),
@@ -358,12 +270,12 @@ impl Widget for &ProvisionedBundle<'_> {
                     )
                     .right_aligned()
                     .into(),
-                    Text::raw(ProvisionedBundle::status_string(mapping.status()))
+                    Text::raw(Provision::status_string(mapping.status()))
                         .right_aligned()
                         .into(),
                 ]);
 
-                ProvisionedBundle::mark_available(row, mapping.status())
+                Provision::mark_available(row, mapping.status())
             }),
             vec![
                 Constraint::Length(1),
@@ -394,6 +306,62 @@ impl Widget for &ProvisionedBundle<'_> {
         .render(layout[1], buf);
 
         Paragraph::new("== EFUSE").bold().render(layout[3], buf);
+    }
+}
+
+impl Widget for &Processing {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let area = render_main(
+            Some(Span::from(" Bundle Preparation ").bold()),
+            Some(Line::from(vec![" Quit ".into(), "<Esc> ".yellow().bold()])),
+            area,
+            buf,
+        );
+
+        const PROGRESS: &[char] = &['-', '\\', '|', '/'];
+
+        let counter_text = Text::from(format!(
+            "{}... {}",
+            if self.status.is_empty() {
+                "Preparing".into()
+            } else {
+                self.status.clone()
+            },
+            PROGRESS[self.counter.0 % 4]
+        ))
+        .bold();
+
+        Paragraph::new(counter_text)
+            .left_aligned()
+            .render(area.inner(Margin::new(2, 2)), buf);
+    }
+}
+
+impl Widget for &Status {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let area = render_main(
+            Some(self.title.clone().bold()),
+            Some(if self.error {
+                Line::from(vec![
+                    " Re-try ".into(),
+                    "<Enter> ".yellow().bold(),
+                    "Quit ".into(),
+                    "<Esc> ".yellow().bold(),
+                ])
+            } else {
+                Line::from(vec![" Continue ".into(), "<Enter> ".yellow().bold()])
+            }),
+            area,
+            buf,
+        );
+
+        let mut para = Paragraph::new(self.message.clone()).bold();
+
+        if self.error {
+            para = para.yellow();
+        }
+
+        para.render(area.inner(Margin::new(2, 4)), buf);
     }
 }
 
