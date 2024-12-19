@@ -83,7 +83,7 @@ where
                         error!("Preparing eFuse readouts failed: {err:?}");
 
                         self.model.modify(|state| {
-                            *state = State::ProvisioningOutcome(Status {
+                            *state = State::PreparingEfuseReadoutsFailed(Status {
                                 title: " Preparing eFuse readouts failed ".to_string(),
                                 message: format!("Preparing eFuse readouts failed: {err:?}"),
                                 error: true,

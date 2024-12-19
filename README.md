@@ -39,7 +39,9 @@ Sample ways to cross-compile:
 
 (NOTE: If `cargo` greets you with a "note: the `XXX` target may not be installed" error, install the target first with `rustup target add XXX`.)
 
-### With [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild) (does not support cross-compiling to Windows)
+### With [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild) 
+
+> Note: does not support cross-compiling to Windows. For Windows, use some of the other options.
 
 ```sh
 cargo install cargo-zigbuild
@@ -47,7 +49,9 @@ pip3 install zig
 cargo zigbuild --target aarch64-unknown-linux-gnu # rPI 4+
 ```
 
-### With [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) (for Windows-MSVC specifically, you'll need `wine` pre-installed)
+### With [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) 
+
+> Note: cross-compiles for Windows-MSVC only. You'll need `wine` pre-installed.
 
 ```sh
 cargo install cargo-xwin
@@ -55,7 +59,9 @@ pip3 install cargo-xwin
 cargo xwin build --target x86_64-pc-windows-msvc
 ```
 
-### With [`cross`](https://hackernoon.com/building-a-wireless-thermostat-in-rust-for-raspberry-pi-part-2) (Needs Docker or Podman)
+### With [`cross`](https://hackernoon.com/building-a-wireless-thermostat-in-rust-for-raspberry-pi-part-2) 
+
+> Note: needs Docker or Podman pre-installed.
 
 ```sh
 cargo install cross
