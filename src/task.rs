@@ -79,7 +79,7 @@ where
     pub async fn run(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
         loop {
             loop {
-                if !Self::succeeded(
+                if !Self::handle(
                     &self.model.clone(),
                     self.prepare_efuse_readouts(input),
                     "Preparing eFuse readouts failed",
@@ -94,7 +94,7 @@ where
                     return Ok(());
                 }
 
-                if Self::succeeded(
+                if Self::handle(
                     &self.model.clone(),
                     self.prepare(input),
                     "Preparing a bundle failed",
@@ -114,7 +114,7 @@ where
                 // TODO: Not very efficient
                 let bundle = self.model.get(|state| state.provision().bundle.clone());
 
-                if Self::succeeded(
+                if Self::handle(
                     &self.model.clone(),
                     self.provision(input),
                     "Provisioning the bundle failed",
@@ -531,7 +531,7 @@ where
         Ok(())
     }
 
-    async fn succeeded<F>(
+    async fn handle<F>(
         model: &Model,
         fut: F,
         err_msg: &str,
