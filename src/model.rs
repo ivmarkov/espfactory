@@ -208,7 +208,7 @@ impl Default for Readout {
 
 /// The state of the model when the bundle is ready to be provisioned or in the process of being provisioned
 /// (i.e. flashed and efused)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Provision {
     /// The prepared bundle
     pub bundle: Bundle,

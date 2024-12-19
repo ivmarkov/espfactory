@@ -112,24 +112,20 @@ where
                 }
 
                 // TODO: Not very efficient
-                let bundle = self.model.get(|state| state.provision().bundle.clone());
+                let provision = self.model.get(|state| state.provision().clone());
 
                 if Self::handle(
                     &self.model.clone(),
                     self.provision(input),
-                    "Provisioning the bundle failed",
+                    &format!("Provisioning bundle `{}` failed", provision.bundle.name),
                     input,
                 )
                 .await?
                 {
                     break;
                 } else {
-                    self.model.modify(|state| {
-                        *state = State::Provision(Provision {
-                            bundle,
-                            provisioning: false,
-                        });
-                    });
+                    self.model
+                        .modify(|state| *state = State::Provision(provision));
                 }
             }
 
