@@ -36,6 +36,10 @@ pub struct Config {
     /// If not provided, the first available port where an ESP chip is
     /// detected will be used
     pub port: Option<String>,
+    /// The flash speed to use for flashing the device
+    ///
+    /// If not provided, the default speed will be used
+    pub flash_speed: Option<u32>,
     /// The method used to identify the bundle to be loaded
     pub bundle_identification: BundleIdentification,
     /// Whether to render a UI for reading the test jig ID
@@ -52,6 +56,7 @@ pub struct Config {
     /// The box ID is used for logging purposes, but also and if the `BundleIdentification::BoxId` is used
     /// it is used to identify the bundle to be loaded
     pub box_id_readout: bool,
+    pub skip_confirmations: bool,
 }
 
 impl Config {
@@ -60,10 +65,12 @@ impl Config {
     pub const fn new() -> Self {
         Self {
             port: None,
+            flash_speed: None,
             bundle_identification: BundleIdentification::None,
             test_jig_id_readout: false,
             pcb_id_readout: false,
             box_id_readout: false,
+            skip_confirmations: false,
         }
     }
 }

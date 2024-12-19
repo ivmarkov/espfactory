@@ -84,6 +84,10 @@ pub struct Config {
     /// If not provided, the first available port where an ESP chip is
     /// detected will be used
     pub port: Option<String>,
+    /// The flash speed to use for flashing the device
+    ///
+    /// If not provided, the default speed will be used
+    pub flash_speed: Option<u32>,
     /// The source of bundles
     pub bundle_source: Option<BundleSource>,
     /// The method used to identify the bundle to be loaded
@@ -110,6 +114,7 @@ pub struct Config {
     ///
     /// If not provided, `false` is assumed
     pub box_id_readout: Option<bool>,
+    pub skip_confirmations: Option<bool>,
 }
 
 impl Config {
@@ -118,11 +123,13 @@ impl Config {
     pub const fn new() -> Self {
         Self {
             port: None,
+            flash_speed: None,
             bundle_source: None,
             bundle_identification: None,
             test_jig_id_readout: None,
             pcb_id_readout: None,
             box_id_readout: None,
+            skip_confirmations: None,
         }
     }
 
@@ -130,10 +137,12 @@ impl Config {
     pub fn to_lib_config(&self) -> espfactory::Config {
         espfactory::Config {
             port: self.port.as_ref().cloned(),
+            flash_speed: self.flash_speed,
             bundle_identification: self.bundle_identification.unwrap_or_default(),
             test_jig_id_readout: self.test_jig_id_readout.unwrap_or_default(),
             pcb_id_readout: self.pcb_id_readout.unwrap_or_default(),
             box_id_readout: self.box_id_readout.unwrap_or_default(),
+            skip_confirmations: self.skip_confirmations.unwrap_or_default(),
         }
     }
 }
@@ -179,11 +188,13 @@ fn main() -> anyhow::Result<()> {
     } else {
         Config {
             port: None,
+            flash_speed: None,
             bundle_source: None,
             bundle_identification: Some(BundleIdentification::BoxId),
             test_jig_id_readout: Some(true),
             pcb_id_readout: Some(true),
             box_id_readout: Some(true),
+            skip_confirmations: Some(true),
         }
     };
 

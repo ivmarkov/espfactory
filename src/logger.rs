@@ -114,9 +114,8 @@ where
     }
 
     fn log(&self, record: &Record) {
-        self.lock(|logger| logger.log(record));
-
-        {
+        if self.lock(|logger| logger.log(record)) {
+            // TODO: Figure out why signalling leads to a deadlock
             let signal = self.signal.lock().unwrap();
             if let Some(signal) = signal.as_ref() {
                 signal.signal();
@@ -169,7 +168,7 @@ where
         })
     }
 
-    fn log(&mut self, record: &Record) {
+    fn log(&mut self, record: &Record) -> bool {
         if self.level >= record.level() {
             if let Some(out) = self.out.as_mut() {
                 let message = format!(
@@ -191,8 +190,12 @@ where
                         message: line.to_string(),
                     });
                 }
+
+                return true;
             }
         }
+
+        false
     }
 
     fn push(&mut self, msg: LogLine) {

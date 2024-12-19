@@ -76,7 +76,9 @@ where
     pub async fn run(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         loop {
             loop {
-                self.readout(input).await;
+                if !self.readout(input).await {
+                    return Ok(());
+                }
 
                 match self.prepare(input).await {
                     Ok(()) => break,
@@ -99,7 +101,7 @@ where
             }
 
             loop {
-                if !input.wait_quit_or(KeyCode::Enter).await {
+                if !self.conf.skip_confirmations && !input.wait_quit_or(KeyCode::Enter).await {
                     break;
                 }
 
@@ -144,7 +146,7 @@ where
                 }
             }
 
-            if !input.wait_quit_or(KeyCode::Enter).await {
+            if !self.conf.skip_confirmations && !input.wait_quit_or(KeyCode::Enter).await {
                 break;
             }
         }
@@ -153,7 +155,7 @@ where
     }
 
     /// Process the readouts state by reading the necessary IDs from the user
-    async fn readout(&mut self, input: &mut Input<'_>) {
+    async fn readout(&mut self, input: &mut Input<'_>) -> bool {
         let init = |readouts: &mut Readouts| {
             readouts.readouts.clear();
             readouts.active = 0;
@@ -187,6 +189,8 @@ where
         while !self.model.get(|state| state.readouts().is_ready()) {
             let key = input.get().await;
 
+            let mut quit = false;
+
             self.model.maybe_modify(|state| {
                 let readouts = state.readouts_mut();
 
@@ -201,6 +205,11 @@ where
                         }
                     }
                     KeyCode::Esc => {
+                        if readouts.active == 0 && readout.1.is_empty() {
+                            quit = true;
+                            return false;
+                        }
+
                         init(readouts);
                         info!("Readouts reset");
                         return true;
@@ -218,7 +227,13 @@ where
 
                 false
             });
+
+            if quit {
+                return false;
+            }
         }
+
+        true
     }
 
     /// Prepare the bundle to be provisioned by loading it from the storage
@@ -437,7 +452,7 @@ where
         flash::flash(
             self.conf.port.as_deref(),
             chip,
-            Some(921600), // TODO
+            self.conf.flash_speed,
             flash_size,
             flash_data,
             FlashProgress::new(self.model.clone()),
