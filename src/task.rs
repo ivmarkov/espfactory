@@ -76,7 +76,26 @@ where
     ///   Necessary as some states require direct user input (e.g. readouts)
     pub async fn run(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         loop {
-            self.prepare_efuse_readouts(input).await?;
+            loop {
+                match self.prepare_efuse_readouts(input).await {
+                    Ok(()) => break,
+                    Err(err) => {
+                        error!("Preparing eFuse readouts failed: {err:?}");
+
+                        self.model.modify(|state| {
+                            *state = State::ProvisioningOutcome(Status {
+                                title: " Preparing eFuse readouts failed ".to_string(),
+                                message: format!("Preparing eFuse readouts failed: {err:?}"),
+                                error: true,
+                            });
+                        });
+
+                        if !input.wait_quit_or(KeyCode::Enter).await {
+                            return Err(err);
+                        }
+                    }
+                }
+            }
 
             loop {
                 if !self.readout(input).await {

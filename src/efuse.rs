@@ -58,9 +58,16 @@ where
         .stderr(Stdio::null())
         .stdin(Stdio::null());
 
-    command
+    let status = command
         .status()
         .context("Executing the eFuse tool with command `summary` failed")?;
+
+    if !status.success() {
+        anyhow::bail!(
+            "eFuse tool `summary` command failed with status: {}. Is the PCB connected?",
+            status
+        );
+    }
 
     let summary = fs::read_to_string(tempfile.path())
         .context("Reading the eFuse tool `summary` command output failed")?;
