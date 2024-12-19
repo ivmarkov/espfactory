@@ -2,8 +2,21 @@
 
 use core::future::Future;
 
+use std::cell::RefCell;
+
+use alloc::sync::Arc;
+
+use anyhow::Context;
+
 use embassy_futures::join::{Join, Join3, Join4, Join5};
 use embassy_futures::select::{Either, Either3, Either4, Select, Select3, Select4};
+
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
+
+use log::error;
+
+extern crate alloc;
 
 /// An extension trait for `Future` that converts any future injto a fallible future
 pub trait IntoFallibleFuture {
@@ -169,4 +182,56 @@ where
             _ => Ok(()),
         }
     }
+}
+
+/// Executes the provided task asynchronously by spawning it in a separate thread and
+/// awaiting on the thread to signal its execution is complete
+///
+/// # Arguments
+/// - `task_name` - The name of the task
+/// - `task` - The task to execute
+///
+/// # Returns
+/// The result of the task
+pub async fn unblock<T, R>(task_name: &str, task: T) -> anyhow::Result<R>
+where
+    T: FnOnce() -> anyhow::Result<R> + Send + 'static,
+    R: Send + 'static,
+{
+    let finished = Arc::new(Signal::<CriticalSectionRawMutex, ()>::new());
+
+    let handle = {
+        let finished = finished.clone();
+
+        std::thread::Builder::new()
+            .name(task_name.to_string())
+            .spawn(move || {
+                let result = task();
+
+                finished.signal(());
+
+                result
+            })
+            .with_context(|| format!("Spawning thread `{task_name}` failed"))?
+    };
+
+    let handle = RefCell::new(Some(handle));
+
+    let _guard = scopeguard::guard(&handle, |handle| {
+        if let Some(handle) = handle.borrow_mut().take() {
+            match handle.join().unwrap() {
+                Ok(_) => {}
+                Err(err) => {
+                    error!("Flashing returned an error: {err}");
+                }
+            }
+        }
+    });
+
+    finished.wait().await;
+
+    // There should be a thread handle as the guard had not kicked in yet at this point
+    let handle = handle.borrow_mut().take().unwrap();
+
+    handle.join().unwrap()
 }

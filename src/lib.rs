@@ -19,6 +19,7 @@ pub use logger::LOGGER;
 extern crate alloc;
 
 mod bundle;
+mod efuse;
 mod flash;
 mod input;
 pub mod loader;
@@ -56,6 +57,7 @@ pub struct Config {
     /// The box ID is used for logging purposes, but also and if the `BundleIdentification::BoxId` is used
     /// it is used to identify the bundle to be loaded
     pub box_id_readout: bool,
+    /// Whether to skip all confirmation screens
     pub skip_confirmations: bool,
 }
 

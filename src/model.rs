@@ -26,7 +26,7 @@ impl Model {
     /// Create a new model in the initial state (readouts)
     pub const fn new(changed: Arc<Signal<CriticalSectionRawMutex, ()>>) -> Self {
         Self {
-            state: Mutex::new(RefCell::new(State::new(Readouts::new()))),
+            state: Mutex::new(RefCell::new(State::new())),
             changed,
         }
     }
@@ -75,7 +75,11 @@ impl Model {
 /// The state of the model
 #[derive(Debug)]
 pub enum State {
-    /// The model is awaiting readouts
+    /// The model is awaiting eFuse readouts
+    PreparingEfuseReadouts(Preparing),
+    /// The model failed to prepare the eFuse readouts
+    PreparingEfuseReadoutsFailed(Status),
+    /// The model is awaiting user readouts
     Readouts(Readouts),
     /// The model is preparing a bundle
     Preparing(Preparing),
@@ -89,10 +93,24 @@ pub enum State {
     ProvisioningOutcome(Status),
 }
 
+impl Default for State {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl State {
-    /// Create a new state in the `Readouts` state
-    pub const fn new(readouts: Readouts) -> Self {
-        Self::Readouts(readouts)
+    /// Create a new state in the `PreparingEfuseReadouts` state
+    pub const fn new() -> Self {
+        Self::PreparingEfuseReadouts(Preparing::new())
+    }
+
+    pub fn preparing_efuse_mut(&mut self) -> &mut Preparing {
+        if let Self::PreparingEfuseReadouts(preparing) = self {
+            preparing
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
     }
 
     /// Get a reference to the readouts from the state
@@ -179,6 +197,9 @@ impl State {
 /// The readouts state of the model
 #[derive(Debug)]
 pub struct Readouts {
+    /// The eFuse readouts to display
+    /// Each readout is a tuple of the eFuse key and its stringified value
+    pub efuse_readouts: Vec<(String, String)>,
     /// The readouts to display and input
     /// Each readout is a tuple of the readout name and the readout value
     pub readouts: Vec<(String, String)>,
@@ -191,7 +212,13 @@ pub struct Readouts {
 impl Readouts {
     /// Create a new `Readouts` state with no readouts
     pub const fn new() -> Self {
+        Self::new_with_efuse(Vec::new())
+    }
+
+    /// Create a new `Readouts` state with no readouts and the given eFuse readouts
+    pub const fn new_with_efuse(efuse_readouts: Vec<(String, String)>) -> Self {
         Self {
+            efuse_readouts,
             readouts: Vec::new(),
             active: 0,
         }

@@ -43,6 +43,8 @@ impl<'a, 'b> View<'a, 'b> {
 impl Widget for &State {
     fn render(self, area: Rect, buf: &mut Buffer) {
         match self {
+            State::PreparingEfuseReadouts(readouts) => readouts.render(area, buf),
+            State::PreparingEfuseReadoutsFailed(failure) => failure.render(area, buf),
             State::Readouts(readouts) => readouts.render(area, buf),
             State::Preparing(searching) => searching.render(area, buf),
             State::PreparingFailed(failure) => failure.render(area, buf),
@@ -69,9 +71,44 @@ impl Widget for &Readouts {
 
         let layout = Layout::new(
             Direction::Vertical,
-            [Constraint::Min(5), Constraint::Length(100)],
+            [
+                Constraint::Min(1),
+                Constraint::Min((self.efuse_readouts.len() + 1) as _),
+                Constraint::Min(1),
+                Constraint::Min(1),
+                Constraint::Min((self.readouts.len() + 1) as _),
+                Constraint::Percentage(100),
+            ],
         )
         .split(area.inner(Margin::new(2, 2)));
+
+        Paragraph::new("== eFuse Readouts")
+            .bold()
+            .render(layout[0], buf);
+
+        Table::new(
+            self.efuse_readouts
+                .iter()
+                .map(|(name, value)| {
+                    Row::new::<Vec<Cell>>(vec![
+                        "".into(),
+                        name.as_str().into(),
+                        value.as_str().into(),
+                    ])
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                Constraint::Length(1),
+                Constraint::Percentage(20),
+                Constraint::Percentage(80),
+            ],
+        )
+        .header(Row::new::<Vec<Cell>>(vec!["".into(), "Name".into(), "Value".into()]).gray())
+        .render(layout[1], buf);
+
+        Paragraph::new("== Input Readouts")
+            .bold()
+            .render(layout[3], buf);
 
         Table::new(
             self.readouts
@@ -102,7 +139,7 @@ impl Widget for &Readouts {
             ],
         )
         .header(Row::new::<Vec<Cell>>(vec!["".into(), "Name".into(), "Value".into()]).gray())
-        .render(layout[0], buf);
+        .render(layout[4], buf);
     }
 }
 
@@ -120,7 +157,7 @@ impl Widget for &Preparing {
         let counter_text = Text::from(format!(
             "{}... {}",
             if self.status.is_empty() {
-                "Looking for firmware bundles".into()
+                "Preparing".into()
             } else {
                 self.status.clone()
             },

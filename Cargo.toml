@@ -33,16 +33,18 @@ zip = { version = "2", default-features = false, features = ["deflate", "deflate
 anyhow = "1"
 esp-idf-part = "0.5"
 espflash = { version = "3.2", features = ["cli"] }
-#esptools = { git = "http://github.com/ivmarkov/esptools" }
+esptools = { git = "http://github.com/ivmarkov/esptools" }
+#esptools = { path = "../esptools" }
 serialport = "4.6"
 log = "0.4"
-thread_local = "1.1"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.8"
 env_logger = { version = "0.11", optional = true }
 directories = { version = "3", optional = true }
 reqwest = "0.12"
 aws-config = { version = "1.1", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1.65"
+tempfile = "3"
 clap = { version = "4", optional = true, features = ["derive"] }

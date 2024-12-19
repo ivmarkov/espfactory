@@ -114,6 +114,9 @@ pub struct Config {
     ///
     /// If not provided, `false` is assumed
     pub box_id_readout: Option<bool>,
+    /// Whether to skip confirmations
+    ///
+    /// If not provided, `false` is assumed
     pub skip_confirmations: Option<bool>,
 }
 

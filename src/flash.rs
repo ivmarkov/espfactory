@@ -1,15 +1,10 @@
-use core::cell::RefCell;
-
 use std::fs;
 use std::io::Write;
 
 use alloc::borrow::Cow;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use anyhow::Context;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::signal::Signal;
 
 use espflash::connection::reset::{ResetAfterOperation, ResetBeforeOperation};
 use espflash::elf::{ElfFirmwareImage, RomSegment};
@@ -17,7 +12,7 @@ use espflash::flasher::{FlashSettings, FlashSize, Flasher, ProgressCallbacks};
 use espflash::image_format::IdfBootloaderFormat;
 use espflash::targets::XtalFrequency;
 
-use log::{error, info, warn};
+use log::{info, warn};
 
 use serialport::{FlowControl, SerialPortInfo, SerialPortType, UsbPortInfo};
 
@@ -73,7 +68,16 @@ pub fn elf2bin(elf_data: &[u8], chip: Chip) -> anyhow::Result<Vec<u8>> {
     Ok(file)
 }
 
-pub async fn flash<P>(
+/// Flash a binary image to the device
+///
+/// Arguments:
+/// - `port` - the serial port to use for flashing. If not provided, the first available port where an ESP chip is detected will be used
+/// - `chip` - the chip which is expected to be flashed. Used for double-checking
+/// - `speed` - the baud rate to use for flashing. If not provided, the default baud rate (115_200) will be used
+/// - `flash_size` - the flash size to be used for flashing. If not provided, the default flash size (4MB) will be used
+/// - `flash_data` - the binary image data to be flashed
+/// - `progress` - the progress callbacks to be used during flashing
+pub fn flash<P>(
     port: Option<&str>,
     chip: Chip,
     speed: Option<u32>,
@@ -84,62 +88,25 @@ pub async fn flash<P>(
 where
     P: ProgressCallbacks + Send + Sync + 'static,
 {
-    let finished = Arc::new(Signal::<CriticalSectionRawMutex, ()>::new());
+    let mut flasher = new(port, chip, speed)?;
 
-    let handle = {
-        let port = port.map(str::to_string);
-        let finished = finished.clone();
+    if let Some(flash_size) = flash_size {
+        flasher.set_flash_size(flash_size);
+    }
 
-        std::thread::spawn(move || {
-            let result = (|| {
-                let mut flasher = new(port.as_deref(), chip, speed)?;
-
-                if let Some(flash_size) = flash_size {
-                    flasher.set_flash_size(flash_size);
-                }
-
-                let segments = flash_data
-                    .iter()
-                    .map(|data| RomSegment {
-                        addr: data.offset,
-                        data: Cow::Borrowed(data.data.as_ref()),
-                    })
-                    .collect::<Vec<_>>();
-
-                flasher
-                    .write_bins_to_flash(&segments, Some(&mut progress))
-                    .context("Flashing failed")?;
-
-                Ok::<_, anyhow::Error>(())
-            })();
-
-            finished.signal(());
-
-            result?;
-
-            Ok(())
+    let segments = flash_data
+        .iter()
+        .map(|data| RomSegment {
+            addr: data.offset,
+            data: Cow::Borrowed(data.data.as_ref()),
         })
-    };
+        .collect::<Vec<_>>();
 
-    let handle = RefCell::new(Some(handle));
+    flasher
+        .write_bins_to_flash(&segments, Some(&mut progress))
+        .context("Flashing failed")?;
 
-    let _guard = scopeguard::guard(&handle, |handle| {
-        if let Some(handle) = handle.borrow_mut().take() {
-            match handle.join().unwrap() {
-                Ok(()) => {}
-                Err(err) => {
-                    error!("Flashing returned an error: {err}");
-                }
-            }
-        }
-    });
-
-    finished.wait().await;
-
-    // There should be a thread handle as the guard had not kicked in yet at this point
-    let handle = handle.borrow_mut().take().unwrap();
-
-    handle.join().unwrap()
+    Ok(())
 }
 
 fn new(port: Option<&str>, chip: Chip, speed: Option<u32>) -> anyhow::Result<Flasher> {

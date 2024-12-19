@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use alloc::sync::Arc;
 
 use anyhow::Context;
+
 use crossterm::event::KeyCode;
 
 use embassy_futures::select::{select, select3, Either};
@@ -15,11 +16,11 @@ use espflash::flasher::ProgressCallbacks;
 use log::{error, info};
 
 use crate::bundle::{Bundle, Params, ProvisioningStatus};
-use crate::flash;
 use crate::input::Input;
 use crate::loader::BundleLoader;
 use crate::model::{Model, Prepared, Preparing, Provisioning, Readouts, State, Status};
-use crate::utils::futures::{Coalesce, IntoFallibleFuture};
+use crate::utils::futures::{unblock, Coalesce, IntoFallibleFuture};
+use crate::{efuse, flash};
 use crate::{BundleIdentification, Config};
 
 extern crate alloc;
@@ -75,6 +76,8 @@ where
     ///   Necessary as some states require direct user input (e.g. readouts)
     pub async fn run(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         loop {
+            self.prepare_efuse_readouts(input).await?;
+
             loop {
                 if !self.readout(input).await {
                     return Ok(());
@@ -154,7 +157,8 @@ where
         Ok(())
     }
 
-    /// Process the readouts state by reading the necessary IDs from the user
+    /// Process the readouts state by visualizing the eFuse readouts (if any) and
+    /// reading the necessary IDs from the user (if any)
     async fn readout(&mut self, input: &mut Input<'_>) -> bool {
         let init = |readouts: &mut Readouts| {
             readouts.readouts.clear();
@@ -180,10 +184,8 @@ where
         };
 
         self.model.modify(|state| {
-            let mut readouts = Readouts::new();
-            init(&mut readouts);
-
-            *state = State::Readouts(readouts);
+            let readouts = state.readouts_mut();
+            init(readouts);
         });
 
         while !self.model.get(|state| state.readouts().is_ready()) {
@@ -234,6 +236,31 @@ where
         }
 
         true
+    }
+
+    /// Prepare the eFuse readouts by reading those from the chip eFuse memory
+    ///
+    /// Displays a progress info while reading the eFuse values
+    async fn prepare_efuse_readouts(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
+        self.model
+            .modify(|state| *state = State::PreparingEfuseReadouts(Preparing::new()));
+
+        let model = self.model.clone();
+
+        select3(
+            Self::tick(Duration::from_millis(100), || {
+                model.modify(|state| {
+                    if let State::PreparingEfuseReadouts(Preparing { counter, .. }) = state {
+                        *counter += 1;
+                    }
+                })
+            })
+            .into_fallible(),
+            input.wait_quit().into_fallible(),
+            self.prep_efuse_readouts(),
+        )
+        .coalesce()
+        .await
     }
 
     /// Prepare the bundle to be provisioned by loading it from the storage
@@ -385,6 +412,59 @@ where
         Ok(bundle)
     }
 
+    /// Prepare the eFuse readouts by reading those from the chip eFuse memory
+    async fn prep_efuse_readouts(&mut self) -> anyhow::Result<()> {
+        static EFUSE_VALUES: &[&str] = &[
+            "MAC",
+            "WAFER_VERSION_MAJOR",
+            "WAFER_VERSION_MINOR",
+            // Not available on all chips
+            "OPTIONAL_UNIQUE_ID",
+            "FLASH_TYPE",
+            "FLASH_VENDOR",
+            "FLASH_CAP",
+            "PSRAM_CAP",
+            "PSRAM_TYPE",
+            "PSRAMP_VENDOR",
+        ];
+
+        self.model.modify(|state| {
+            state.preparing_efuse_mut().status = "Reading Chip IDs from eFuse".to_string();
+        });
+
+        info!("About to read Chip IDs from eFuse");
+
+        let efuse_values = unblock("efuse", || {
+            let tools = esptools::Tools::mount().context("Mounting esptools failed")?;
+
+            let efuse_values = efuse::summary(&tools, EFUSE_VALUES.iter().copied())?;
+
+            let efuse_values = efuse_values
+                .iter()
+                .filter_map(|(k, v)| {
+                    v.value.as_str().and_then(|v| {
+                        EFUSE_VALUES
+                            .iter()
+                            .find(|&x| x == k)
+                            .map(|&x| (x.to_string(), v.to_string()))
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            Ok(efuse_values)
+        })
+        .await?;
+
+        for (key, value) in efuse_values.iter() {
+            info!("Chip {key}: {value}");
+        }
+
+        self.model
+            .modify(move |state| *state = State::Readouts(Readouts::new_with_efuse(efuse_values)));
+
+        Ok(())
+    }
+
     /// Prepare the bundle to be provisioned by creating a `Bundle` instance from the loaded bundle content
     /// in the bundle workspace directory
     async fn prep_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<()> {
@@ -449,14 +529,20 @@ where
             flash_data.len()
         );
 
-        flash::flash(
-            self.conf.port.as_deref(),
-            chip,
-            self.conf.flash_speed,
-            flash_size,
-            flash_data,
-            FlashProgress::new(self.model.clone()),
-        )
+        let flash_port = self.conf.port.clone();
+        let flash_speed = self.conf.flash_speed;
+        let flash_model = self.model.clone();
+
+        unblock("flash", move || {
+            flash::flash(
+                flash_port.as_deref(),
+                chip,
+                flash_speed,
+                flash_size,
+                flash_data,
+                FlashProgress::new(flash_model),
+            )
+        })
         .await?;
 
         info!("Flash complete");
