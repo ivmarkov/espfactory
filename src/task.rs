@@ -1,6 +1,5 @@
 use core::future::Future;
 
-use std::collections::HashMap;
 use std::fs::{self, DirEntry, File};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -21,7 +20,7 @@ use log::{error, info};
 use crate::bundle::{Bundle, Params, ProvisioningStatus};
 use crate::input::Input;
 use crate::loader::BundleLoader;
-use crate::model::{Model, Processing, Provision, Readout, State, Status};
+use crate::model::{Model, Processing, Provision, Readout, State};
 use crate::utils::futures::{unblock, Coalesce, IntoFallibleFuture};
 use crate::{efuse, flash};
 use crate::{BundleIdentification, Config};
@@ -77,23 +76,17 @@ where
     /// Arguments:
     /// - `input` - the input helper to process terminal events
     ///   Necessary as some states require direct user input (e.g. readouts)
-    pub async fn run(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
+    pub async fn run(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
         loop {
             loop {
-                if let Err(err) = self.prepare_efuse_readouts(input).await {
-                    error!("Preparing eFuse readouts failed: {err:?}");
-
-                    self.model.modify(|state| {
-                        state.error(
-                            " Preparing eFuse readouts failed ",
-                            format!("Preparing eFuse readouts failed: {err:?}"),
-                        )
-                    });
-
-                    if !input.wait_quit_or(KeyCode::Enter).await {
-                        return Err(err);
-                    }
-
+                if !Self::succeeded(
+                    &self.model.clone(),
+                    self.prepare_efuse_readouts(input),
+                    "Preparing eFuse readouts failed",
+                    input,
+                )
+                .await?
+                {
                     continue;
                 }
 
@@ -101,24 +94,15 @@ where
                     return Ok(());
                 }
 
-                match self.prepare(input).await {
-                    Ok(()) => break,
-                    Err(err) => {
-                        error!("Preparing a bundle failed: {err:?}");
-
-                        self.model.modify(|state| {
-                            state.error(
-                                " Preparing a bundle failed ",
-                                format!("Preparing a bundle failed: {err:?}"),
-                            )
-                        });
-
-                        if !input.wait_quit_or(KeyCode::Enter).await {
-                            return Err(err);
-                        }
-
-                        continue;
-                    }
+                if Self::succeeded(
+                    &self.model.clone(),
+                    self.prepare(input),
+                    "Preparing a bundle failed",
+                    input,
+                )
+                .await?
+                {
+                    break;
                 }
             }
 
@@ -127,44 +111,25 @@ where
                     break;
                 }
 
-                match self.provision(input).await {
-                    Ok(()) => break,
-                    Err(err) => {
-                        error!("Provisioning the bundle failed: {err:?}");
+                // TODO: Not very efficient
+                let bundle = self.model.get(|state| state.provision().bundle.clone());
 
-                        let mut prepared_bundle = None;
-
-                        self.model.modify(|state| {
-                            let prev_state = core::mem::replace(
-                                state,
-                                State::Status(Status::error(
-                                    format!(
-                                        " Provisioning {} failed ",
-                                        state.provision().bundle.name
-                                    ),
-                                    format!("Provisioning the bundle failed: {err:?}"),
-                                )),
-                            );
-
-                            let State::Provision(Provision { bundle, .. }) = prev_state else {
-                                unreachable!();
-                            };
-
-                            prepared_bundle = Some(bundle);
+                if Self::succeeded(
+                    &self.model.clone(),
+                    self.provision(input),
+                    "Provisioning the bundle failed",
+                    input,
+                )
+                .await?
+                {
+                    break;
+                } else {
+                    self.model.modify(|state| {
+                        *state = State::Provision(Provision {
+                            bundle,
+                            provisioning: false,
                         });
-
-                        if !input.wait_quit_or(KeyCode::Enter).await {
-                            return Err(err);
-                        }
-
-                        self.model.modify(|state| {
-                            *state = State::Provision(Provision {
-                                bundle: prepared_bundle.unwrap(),
-                                efuses_status: HashMap::new(), // TODO
-                                provisioning: false,
-                            });
-                        });
-                    }
+                    });
                 }
             }
 
@@ -178,7 +143,7 @@ where
 
     /// Process the readouts state by visualizing the eFuse readouts (if any) and
     /// reading the necessary IDs from the user (if any)
-    async fn readout(&mut self, input: &mut Input<'_>) -> bool {
+    async fn readout(&mut self, input: &Input<'_>) -> bool {
         let init = |readouts: &mut Readout| {
             readouts.readouts.clear();
             readouts.active = 0;
@@ -260,7 +225,7 @@ where
     /// Prepare the eFuse readouts by reading those from the chip eFuse memory
     ///
     /// Displays a progress info while reading the eFuse values
-    async fn prepare_efuse_readouts(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
+    async fn prepare_efuse_readouts(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
         self.model
             .modify(|state| *state = State::Processing(Processing::new()));
 
@@ -268,7 +233,7 @@ where
     }
 
     /// Prepare the bundle to be provisioned by loading it from the storage
-    async fn prepare(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
+    async fn prepare(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
         let (_test_jig_id, pcb_id, box_id) = self.model.get(|state| {
             let readouts = state.readout();
             let mut offset = 0;
@@ -485,7 +450,6 @@ where
         self.model.modify(move |state| {
             *state = State::Provision(Provision {
                 bundle,
-                efuses_status: HashMap::new(),
                 provisioning: false,
             })
         });
@@ -494,7 +458,7 @@ where
     }
 
     /// Provision the bundle by flashing and optionally efusing the chip with the bundle content
-    async fn provision(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
+    async fn provision(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
         match select(self.prov_bundle(), input.swallow()).await {
             Either::First(result) => result,
         }
@@ -567,7 +531,32 @@ where
         Ok(())
     }
 
-    async fn process<F>(model: &Model, fut: F, input: &mut Input<'_>) -> anyhow::Result<()>
+    async fn succeeded<F>(
+        model: &Model,
+        fut: F,
+        err_msg: &str,
+        input: &Input<'_>,
+    ) -> anyhow::Result<bool>
+    where
+        F: Future<Output = anyhow::Result<()>>,
+    {
+        if let Err(err) = fut.await {
+            error!("{err_msg}: {err:?}");
+
+            model
+                .modify(|state| state.error(format!(" {err_msg} "), format!("{err_msg}: {err:?}")));
+
+            if !input.wait_quit_or(KeyCode::Enter).await {
+                return Err(err);
+            }
+
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    }
+
+    async fn process<F>(model: &Model, fut: F, input: &Input<'_>) -> anyhow::Result<()>
     where
         F: Future<Output = anyhow::Result<()>>,
     {

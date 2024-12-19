@@ -120,7 +120,7 @@ where
 
     let result = select(
         View::new(&model, &mut terminal).run(),
-        Task::new(model.clone(), conf, bundle_dir, loader).run(&mut Input::new(&model)),
+        Task::new(model.clone(), conf, bundle_dir, loader).run(&Input::new(&model)),
     )
     .coalesce()
     .await;

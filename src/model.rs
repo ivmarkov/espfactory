@@ -3,13 +3,11 @@ use core::num::Wrapping;
 
 use alloc::sync::Arc;
 
-use std::collections::HashMap;
-
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 
-use crate::bundle::{Bundle, ProvisioningStatus};
+use crate::bundle::Bundle;
 
 extern crate alloc;
 
@@ -122,8 +120,8 @@ impl State {
     /// Get a reference to the provision state
     /// Panics if the state is not `Provision`
     pub fn provision(&self) -> &Provision {
-        if let Self::Provision(prepared) = self {
-            prepared
+        if let Self::Provision(provision) = self {
+            provision
         } else {
             panic!("Unexpected state: {self:?}")
         }
@@ -132,8 +130,8 @@ impl State {
     /// Get a mutable reference to the provision state
     /// Panics if the state is not `Provision`
     pub fn provision_mut(&mut self) -> &mut Provision {
-        if let Self::Provision(prepared) = self {
-            prepared
+        if let Self::Provision(provision) = self {
+            provision
         } else {
             panic!("Unexpected state: {self:?}")
         }
@@ -214,8 +212,6 @@ impl Default for Readout {
 pub struct Provision {
     /// The prepared bundle
     pub bundle: Bundle,
-    /// TBD
-    pub efuses_status: HashMap<String, ProvisioningStatus>,
     /// Whether the bundle is being provisioned (flashed and efused)
     pub provisioning: bool,
 }
