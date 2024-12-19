@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use async_compat::CompatExt;
+
 use clap::{ColorChoice, Parser, Subcommand, ValueEnum};
 
 use espfactory::loader::{dir::DirLoader, http::HttpLoader, BundleLoader};
@@ -235,7 +237,9 @@ fn main() -> anyhow::Result<()> {
 
         std::env::set_var("RUST_LIB_BACKTRACE", "1");
 
-        futures_lite::future::block_on(espfactory::run(&conf.to_lib_config(), bundle_dir, loader))?;
+        futures_lite::future::block_on(
+            espfactory::run(&conf.to_lib_config(), bundle_dir, loader).compat(),
+        )?;
     }
 
     Ok(())

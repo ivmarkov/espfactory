@@ -31,9 +31,9 @@ TBD
 
 ## Cross-building for other targets than the host one
 
-As long as the `s3` and `libudev` features are disabled (by default they are), you can cross-build the `espfactory` CLI executable just fine.
+As long as the `libudev` feature is disabled (by default it is), you can easily cross-build the `espfactory` CLI executable.
 
-Putting aside the above two features, the rest of `espfactory` is pure-Rust so you only need a [linker for your cross-target](https://capnfabs.net/posts/cross-compiling-rust-apps-raspberry-pi/).
+The rest of `espfactory` is pure-Rust so you only need a [linker for your cross-target](https://capnfabs.net/posts/cross-compiling-rust-apps-raspberry-pi/) and a C cross toolchain for the few dependencies that still need to compile custom C files (`ring`).
 
 Sample ways to cross-compile:
 

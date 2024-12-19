@@ -199,7 +199,7 @@ impl<'a> BucketWithPrefix<'a> {
 impl Display for BucketWithPrefix<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(prefix) = self.prefix {
-            write!(f, "{}/{}", self.bucket, prefix)
+            write!(f, "{}{}", self.bucket, prefix)
         } else {
             write!(f, "{}", self.bucket)
         }

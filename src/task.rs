@@ -77,27 +77,24 @@ where
     pub async fn run(&mut self, input: &mut Input<'_>) -> anyhow::Result<()> {
         loop {
             loop {
-                match self.prepare_efuse_readouts(input).await {
-                    Ok(()) => break,
-                    Err(err) => {
-                        error!("Preparing eFuse readouts failed: {err:?}");
+                if let Err(err) = self.prepare_efuse_readouts(input).await {
+                    error!("Preparing eFuse readouts failed: {err:?}");
 
-                        self.model.modify(|state| {
-                            *state = State::PreparingEfuseReadoutsFailed(Status {
-                                title: " Preparing eFuse readouts failed ".to_string(),
-                                message: format!("Preparing eFuse readouts failed: {err:?}"),
-                                error: true,
-                            });
+                    self.model.modify(|state| {
+                        *state = State::PreparingEfuseReadoutsFailed(Status {
+                            title: " Preparing eFuse readouts failed ".to_string(),
+                            message: format!("Preparing eFuse readouts failed: {err:?}"),
+                            error: true,
                         });
+                    });
 
-                        if !input.wait_quit_or(KeyCode::Enter).await {
-                            return Err(err);
-                        }
+                    if !input.wait_quit_or(KeyCode::Enter).await {
+                        return Err(err);
                     }
-                }
-            }
 
-            loop {
+                    continue;
+                }
+
                 if !self.readout(input).await {
                     return Ok(());
                 }
@@ -118,6 +115,8 @@ where
                         if !input.wait_quit_or(KeyCode::Enter).await {
                             return Err(err);
                         }
+
+                        continue;
                     }
                 }
             }
