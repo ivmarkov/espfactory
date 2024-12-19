@@ -10,6 +10,12 @@ use log::info;
 
 use super::{BundleLoader, BundleType};
 
+/// Re-export the `aws-config` crate as a module so that the user
+/// does not have to depend on the `aws-cponfig` crate directly
+pub mod aws_config {
+    pub use ::aws_config::*;
+}
+
 /// A loader that reads bundles from an S3 bucket and an optional prefix.
 ///
 /// The loader will attempt to load a bundle by ID, or if no ID is provided, it will load the first bundle found in the bucket, by listing
@@ -24,13 +30,18 @@ use super::{BundleLoader, BundleType};
 ///   Furthermore, if the `delete_after_load` flag is set to `true`, then the loader will delete the loaded bundle from the bucket
 #[derive(Debug, Clone)]
 pub struct S3Loader {
+    config: Option<aws_config::SdkConfig>,
     bucket: String,
     prefix: Option<String>,
     delete_after_load: bool,
 }
 
 impl S3Loader {
-    pub fn new_from_path(path: String, delete_after_load: bool) -> Self {
+    pub fn new_from_path(
+        config: Option<aws_config::SdkConfig>,
+        path: String,
+        delete_after_load: bool,
+    ) -> Self {
         let path = path.trim_matches('/');
         let (bucket, prefix) = if let Some(split) = path.find('/') {
             let (bucket, prefix) = path.split_at(split);
@@ -41,6 +52,7 @@ impl S3Loader {
         };
 
         Self::new(
+            config,
             bucket.to_string(),
             prefix.map(|p| p.to_string()),
             delete_after_load,
@@ -54,8 +66,14 @@ impl S3Loader {
     /// - `prefix_key`: An optional prefix key to use when loading the bundles
     /// - `delete_after_load`: A flag indicating whether the loaded bundle should be deleted from the bucket after loading
     ///   Used only when loading a random bundle (i.e., the `id` argument when calling `load` is not provided)
-    pub const fn new(bucket: String, prefix: Option<String>, delete_after_load: bool) -> Self {
+    pub const fn new(
+        config: Option<aws_config::SdkConfig>,
+        bucket: String,
+        prefix: Option<String>,
+        delete_after_load: bool,
+    ) -> Self {
         Self {
+            config,
             bucket,
             prefix,
             delete_after_load,
@@ -80,7 +98,12 @@ impl BundleLoader for S3Loader {
             );
         }
 
-        let config = aws_config::load_from_env().await;
+        let config = if let Some(config) = self.config.as_ref() {
+            config.clone()
+        } else {
+            aws_config::load_from_env().await
+        };
+
         let client = aws_sdk_s3::Client::new(&config);
 
         if let Some(id) = id {
@@ -155,7 +178,7 @@ impl BundleLoader for S3Loader {
 
                             let bundle_name = key.split('/').last().unwrap_or(key).to_string();
 
-                            if self.delete_after_load {
+                            if id.is_none() && self.delete_after_load {
                                 client
                                     .delete_object()
                                     .bucket(&self.bucket)

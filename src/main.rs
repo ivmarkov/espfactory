@@ -160,6 +160,7 @@ impl Default for Config {
 }
 
 /// Wrapper enum for the loaders supported OOTB
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Loader {
     /// Load bundles from a directory
@@ -222,6 +223,7 @@ fn main() -> anyhow::Result<()> {
                 path,
                 delete_after_load,
             } => Loader::S3(espfactory::loader::s3::S3Loader::new_from_path(
+                None,
                 path,
                 delete_after_load,
             )),
