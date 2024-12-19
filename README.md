@@ -28,3 +28,34 @@ A Rust alternative to a custom-made Python or shell script driving the ESP provi
 ## How to use?
 
 TBD
+
+## Cross-building for other targets than the host one
+
+As long as the `s3` and `libudev` features are disabled (by default they are), you can cross-build the `espfactory` CLI executable just fine.
+
+Putting aside the above two features, the rest of `espfactory` is pure-Rust so you only need a [linker for your target](https://capnfabs.net/posts/cross-compiling-rust-apps-raspberry-pi/).
+
+Sample ways to cross-compile:
+
+### With [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild) (does not support cross-compiling to Windows)
+
+```sh
+cargo install cargo-zigbuild
+pip3 install zig
+cargo zigbuild --release --target x86_64-apple-darwin
+```
+
+### With [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) (for Windows-MSVC specifically, you'll need `wine` pre-installed)
+
+```sh
+cargo install cargo-xwin
+pip3 install cargo-xwin
+cargo xwin build --release --target x86_64-pc-windows-msvc
+```
+
+### With [`cross`](https://hackernoon.com/building-a-wireless-thermostat-in-rust-for-raspberry-pi-part-2) (Needs Docker or Podman)
+
+```sh
+cargo install cross
+cross build --release --target=x86_64-pc-windows-gnu # For e.g. Windows; MSVC is not supported, only the GNU target
+```

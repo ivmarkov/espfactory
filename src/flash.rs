@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::Write;
 
 use alloc::borrow::Cow;
@@ -218,7 +217,7 @@ fn find_serial_port(
         info!("Finding serial port {name}");
 
         #[cfg(not(target_os = "windows"))]
-        let name = fs::canonicalize(name).with_context(|| format!("Port {name} not found"))?;
+        let name = std::fs::canonicalize(name).with_context(|| format!("Port {name} not found"))?;
         #[cfg(not(target_os = "windows"))]
         let name = name.to_string_lossy();
 

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{ColorChoice, Parser, Subcommand, ValueEnum};
 
-use espfactory::loader::{dir::DirLoader, http::HttpLoader, s3::S3Loader, BundleLoader};
+use espfactory::loader::{dir::DirLoader, http::HttpLoader, BundleLoader};
 use espfactory::{BundleIdentification, LOGGER};
 
 use log::LevelFilter;
@@ -45,6 +45,7 @@ pub enum BundleSource {
         uri: String,
     },
     /// Load bundles from an S3 bucket
+    #[cfg(feature = "s3")]
     S3 {
         #[arg(short = 'd', long)]
         delete_after_load: bool,
@@ -164,7 +165,8 @@ pub enum Loader {
     /// Load bundles from an HTTP(s) server
     Http(HttpLoader),
     /// Load bundles from an S3 bucket
-    S3(S3Loader),
+    #[cfg(feature = "s3")]
+    S3(espfactory::loader::s3::S3Loader),
 }
 
 impl BundleLoader for Loader {
@@ -175,6 +177,7 @@ impl BundleLoader for Loader {
         match self {
             Self::Dir(loader) => loader.load(write, id).await,
             Self::Http(loader) => loader.load(write, id).await,
+            #[cfg(feature = "s3")]
             Self::S3(loader) => loader.load(write, id).await,
         }
     }
@@ -212,10 +215,14 @@ fn main() -> anyhow::Result<()> {
             BundleSource::Http { uri, authorization } => {
                 Loader::Http(HttpLoader::new(uri, authorization))
             }
+            #[cfg(feature = "s3")]
             BundleSource::S3 {
                 path,
                 delete_after_load,
-            } => Loader::S3(S3Loader::new_from_path(path, delete_after_load)),
+            } => Loader::S3(espfactory::loader::s3::S3Loader::new_from_path(
+                path,
+                delete_after_load,
+            )),
         });
 
     if let Some(loader) = loader {

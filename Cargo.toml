@@ -16,9 +16,14 @@ rust-version = "1.82"
 name = "espfactory"
 required-features = ["bin"]
 
+[patch.crates-io]
+espflash = { git = "https://github.com/ivmarkov/espflash", branch = "optional-libudev" }
+
 [features]
 default = ["bin"]
 bin = ["directories", "clap"]
+libudev = ["espflash/libudev", "serialport/libudev"]
+s3 = ["aws-config", "aws-sdk-s3"]
 
 [dependencies]
 crossterm = "0.28"
@@ -34,8 +39,7 @@ anyhow = "1"
 esp-idf-part = "0.5"
 espflash = { version = "3.2", features = ["cli"] }
 esptools = { git = "http://github.com/ivmarkov/esptools" }
-#esptools = { path = "../esptools" }
-serialport = "4.6"
+serialport = { version = "4.6", default-features = false }
 log = "0.4"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
@@ -43,8 +47,8 @@ serde_json = "1"
 toml = "0.8"
 env_logger = { version = "0.11", optional = true }
 directories = { version = "3", optional = true }
-reqwest = "0.12"
-aws-config = { version = "1.1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = "1.65"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset"] }
+aws-config = { version = "1.1", features = ["behavior-version-latest"], optional = true }
+aws-sdk-s3 = { version = "1.65", optional = true }
 tempfile = "3"
 clap = { version = "4", optional = true, features = ["derive"] }

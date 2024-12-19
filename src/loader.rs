@@ -2,6 +2,7 @@ use std::io::Write;
 
 pub mod dir;
 pub mod http;
+#[cfg(feature = "s3")]
 pub mod s3;
 
 /// Supported bundle types
