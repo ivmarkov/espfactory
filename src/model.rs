@@ -30,7 +30,7 @@ impl Model {
     }
 
     /// Get the current state of the model in the given closure
-    pub fn get<F, R>(&self, f: F) -> R
+    pub fn access<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&State) -> R,
     {
@@ -42,15 +42,15 @@ impl Model {
     where
         F: FnOnce(&mut State),
     {
-        self.maybe_modify(|state| {
+        self.access_mut(|state| {
             f(state);
             true
         });
     }
 
-    /// Maybe modify the state of the model by applying the given closure to it
+    /// Accwess the state of the model by applying the given closure to it
     /// If the closure returns `true`, the model is considered to have changed and the `changed` signal is triggered
-    pub fn maybe_modify<F>(&self, f: F)
+    pub fn access_mut<F>(&self, f: F)
     where
         F: FnOnce(&mut State) -> bool,
     {

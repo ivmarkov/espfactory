@@ -1,6 +1,6 @@
 # espfactory (WIP!)
 
-A utility for flashing/provisioning ESP32 PCBs at the factory premises
+A utility for flashing/provisioning ESP32 PCBs at the factory premises.
 
 [![CI](https://github.com/ivmarkov/espfactory/actions/workflows/ci.yml/badge.svg)](https://github.com/ivmarkov/espfactory/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/espfactory.svg)](https://crates.io/crates/espfactory)
@@ -8,7 +8,7 @@ A utility for flashing/provisioning ESP32 PCBs at the factory premises
 
 ## What is this really?
 
-A Rust alternative to a custom-made Python or shell script driving the ESP provisioning tools (`esptool`, `espefuse`, `espflash`)
+A Rust alternative to a custom-made Python or shell script driving the ESP provisioning tools (`esptool`, `espefuse`, `espflash`).
 
 ## Highlights
 
@@ -37,11 +37,9 @@ The rest of `espfactory` is pure-Rust so you only need a [linker for your cross-
 
 Sample ways to cross-compile:
 
-(NOTE: If `cargo` greets you with a "note: the `XXX` target may not be installed" error, install the target first with `rustup target add XXX`.)
+(If `cargo` greets you with a "note: the `XXX` target may not be installed" error, install the target first with `rustup target add XXX`.)
 
 ### With [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild) 
-
-> Note: does not support cross-compiling to Windows. For Windows, use some of the other options.
 
 ```sh
 cargo install cargo-zigbuild
@@ -49,9 +47,9 @@ pip3 install zig
 cargo zigbuild --target aarch64-unknown-linux-gnu # rPI 4+
 ```
 
-### With [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) 
+> Note: does not support cross-compiling to Windows. For Windows, use some of the other options.
 
-> Note: cross-compiles for Windows-MSVC only. You'll need `wine` pre-installed.
+### With [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) 
 
 ```sh
 cargo install cargo-xwin
@@ -60,9 +58,9 @@ cargo xwin build --target x86_64-pc-windows-msvc
 
 ### With [`cross`](https://hackernoon.com/building-a-wireless-thermostat-in-rust-for-raspberry-pi-part-2) 
 
-> Note: needs Docker or Podman pre-installed.
-
 ```sh
 cargo install cross
 cross build --target=x86_64-pc-windows-gnu # For e.g. Windows; Windows MSVC is not supported, only the GNU target
 ```
+
+> Note: needs Docker or Podman pre-installed.

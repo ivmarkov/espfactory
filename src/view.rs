@@ -30,7 +30,7 @@ impl<'a, 'b> View<'a, 'b> {
     /// Runs the view rendering loop by watching for changes in the model and re-rendering the UI
     pub async fn run(&mut self) -> anyhow::Result<()> {
         loop {
-            self.model.get(|state| {
+            self.model.access(|state| {
                 self.term
                     .draw(|frame| frame.render_widget(state, frame.area()))
             })?;

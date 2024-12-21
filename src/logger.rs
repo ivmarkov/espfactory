@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::Write;
 use std::sync::Mutex;
 
@@ -12,8 +11,10 @@ use log::{Level, LevelFilter, Log, Metadata, Record};
 
 extern crate alloc;
 
+pub type LogFile = tempfile::NamedTempFile;
+
 /// The global logger used by the factory
-pub static LOGGER: Logger<File, Arc<Signal<CriticalSectionRawMutex, ()>>> =
+pub static LOGGER: Logger<LogFile, Arc<Signal<CriticalSectionRawMutex, ()>>> =
     Logger::new(LevelFilter::Debug, LevelFilter::Info, 10);
 
 /// A trait for signaling that a log message has been written
@@ -214,4 +215,56 @@ pub struct LogLine {
     pub level: Level,
     /// The message to be displayed on that line
     pub message: String,
+}
+
+pub mod file {
+    use std::io::{Read, Write};
+
+    use tempfile::NamedTempFile;
+
+    use zip::{write::FileOptions, ZipWriter};
+
+    use super::LogFile;
+
+    pub fn start() -> anyhow::Result<LogFile> {
+        let log = NamedTempFile::new()?;
+
+        Ok(log)
+    }
+
+    pub fn finish<'i, I, S>(mut log: LogFile, summary: I) -> anyhow::Result<impl Read>
+    where
+        I: IntoIterator<Item = (&'i S, &'i S)>,
+        S: AsRef<str> + 'i,
+    {
+        log.flush()?;
+
+        let mut log_zip_file = NamedTempFile::new()?;
+
+        let mut log_zip = ZipWriter::new(&mut log_zip_file);
+        log_zip.start_file("log.txt", FileOptions::<()>::default())?;
+
+        log.reopen()?;
+        std::io::copy(&mut log, &mut log_zip)?;
+
+        log_zip.start_file("log.csv", FileOptions::<()>::default())?;
+
+        let mut csv = csv::WriterBuilder::new()
+            .has_headers(true)
+            .from_writer(&mut log);
+
+        csv.serialize(("Name", "Value"))?;
+
+        for (name, value) in summary {
+            csv.serialize((name.as_ref(), value.as_ref()))?;
+        }
+
+        csv.flush()?;
+
+        drop(log_zip);
+
+        log_zip_file.reopen()?;
+
+        Ok(log_zip_file)
+    }
 }

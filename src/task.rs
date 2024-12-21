@@ -1,5 +1,6 @@
 use core::future::Future;
 
+use std::collections::HashMap;
 use std::fs::{self, DirEntry, File};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -22,7 +23,7 @@ use crate::input::Input;
 use crate::loader::BundleLoader;
 use crate::model::{Model, Processing, Provision, Readout, State};
 use crate::utils::futures::{unblock, Coalesce, IntoFallibleFuture};
-use crate::{efuse, flash};
+use crate::{efuse, flash, LOGGER};
 use crate::{BundleIdentification, Config};
 
 extern crate alloc;
@@ -77,15 +78,28 @@ where
     /// - `input` - the input helper to process terminal events
     ///   Necessary as some states require direct user input (e.g. readouts)
     pub async fn run(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
-        loop {
-            loop {
-                if !Self::handle(
+        'outer: loop {
+            {
+                let log_file = super::logger::file::start()?;
+
+                LOGGER.lock(|logger| logger.swap_out(Some(log_file)));
+            }
+
+            let mut summary = HashMap::<String, String>::new();
+
+            let _guard = scopeguard::guard((), |_| {
+                LOGGER.lock(|logger| logger.swap_out(None));
+            });
+
+            let bundle_id = loop {
+                if Self::handle(
                     &self.model.clone(),
                     self.prepare_efuse_readouts(input),
                     "Preparing eFuse readouts failed",
                     input,
                 )
                 .await?
+                .is_none()
                 {
                     continue;
                 }
@@ -94,7 +108,19 @@ where
                     return Ok(());
                 }
 
-                if Self::handle(
+                self.model.access(|state| {
+                    let readout = state.readout();
+
+                    for (name, value) in &readout.efuse_readouts {
+                        summary.insert(name.clone(), value.clone());
+                    }
+
+                    for (name, value) in &readout.readouts {
+                        summary.insert(name.clone(), value.clone());
+                    }
+                });
+
+                if let Some(bundle_id) = Self::handle(
                     &self.model.clone(),
                     self.prepare(input),
                     "Preparing a bundle failed",
@@ -102,17 +128,17 @@ where
                 )
                 .await?
                 {
-                    break;
+                    break bundle_id;
                 }
-            }
+            };
 
-            loop {
+            let provision = loop {
                 if !self.conf.skip_confirmations && !input.wait_quit_or(KeyCode::Enter).await {
-                    break;
+                    continue 'outer;
                 }
 
                 // TODO: Not very efficient
-                let provision = self.model.get(|state| state.provision().clone());
+                let provision = self.model.access(|state| state.provision().clone());
 
                 if Self::handle(
                     &self.model.clone(),
@@ -121,12 +147,20 @@ where
                     input,
                 )
                 .await?
+                .is_some()
                 {
-                    break;
+                    break provision;
                 } else {
                     self.model
                         .modify(|state| *state = State::Provision(provision));
                 }
+            };
+
+            if let Some(log_file) = LOGGER.lock(|logger| logger.swap_out(None)) {
+                let log = super::logger::file::finish(log_file, &summary)?;
+                self.bundle_loader
+                    .upload_logs(log, bundle_id.as_deref(), &provision.bundle.name)
+                    .await?;
             }
 
             if !self.conf.skip_confirmations && !input.wait_quit_or(KeyCode::Enter).await {
@@ -168,12 +202,12 @@ where
             init(readouts);
         });
 
-        while !self.model.get(|state| state.readout().is_ready()) {
+        while !self.model.access(|state| state.readout().is_ready()) {
             let key = input.get().await;
 
             let mut quit = false;
 
-            self.model.maybe_modify(|state| {
+            self.model.access_mut(|state| {
                 let readouts = state.readout_mut();
 
                 let readout = &mut readouts.readouts[readouts.active];
@@ -229,8 +263,8 @@ where
     }
 
     /// Prepare the bundle to be provisioned by loading it from the storage
-    async fn prepare(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
-        let (_test_jig_id, pcb_id, box_id) = self.model.get(|state| {
+    async fn prepare(&mut self, input: &Input<'_>) -> anyhow::Result<Option<String>> {
+        let (_test_jig_id, pcb_id, box_id) = self.model.access(|state| {
             let readouts = state.readout();
             let mut offset = 0;
 
@@ -278,7 +312,9 @@ where
             self.prep_bundle(bundle_id.as_deref()),
             input,
         )
-        .await
+        .await?;
+
+        Ok(bundle_id)
     }
 
     /// Load the bundle from the storage of the bundle loader into the bundle workspace directory
@@ -470,7 +506,7 @@ where
             ps.bundle.set_status_all(ProvisioningStatus::Pending);
         });
 
-        let (chip, flash_size, flash_data) = self.model.get(|state| {
+        let (chip, flash_size, flash_data) = self.model.access(|state| {
             let ps = state.provision();
 
             (
@@ -527,28 +563,30 @@ where
         Ok(())
     }
 
-    async fn handle<F>(
+    async fn handle<F, R>(
         model: &Model,
         fut: F,
         err_msg: &str,
         input: &Input<'_>,
-    ) -> anyhow::Result<bool>
+    ) -> anyhow::Result<Option<R>>
     where
-        F: Future<Output = anyhow::Result<()>>,
+        F: Future<Output = anyhow::Result<R>>,
     {
-        if let Err(err) = fut.await {
-            error!("{err_msg}: {err:?}");
+        match fut.await {
+            Ok(result) => Ok(Some(result)),
+            Err(err) => {
+                error!("{err_msg}: {err:?}");
 
-            model
-                .modify(|state| state.error(format!(" {err_msg} "), format!("{err_msg}: {err:?}")));
+                model.modify(|state| {
+                    state.error(format!(" {err_msg} "), format!("{err_msg}: {err:?}"))
+                });
 
-            if !input.wait_quit_or(KeyCode::Enter).await {
-                return Err(err);
+                if !input.wait_quit_or(KeyCode::Enter).await {
+                    return Err(err);
+                }
+
+                Ok(None)
             }
-
-            Ok(false)
-        } else {
-            Ok(true)
         }
     }
 
@@ -604,7 +642,7 @@ impl ProgressCallbacks for FlashProgress {
     fn init(&mut self, addr: u32, total: usize) {
         *self.image.lock().unwrap() = Some((addr, total));
 
-        self.model.maybe_modify(|state| {
+        self.model.access_mut(|state| {
             state
                 .provision_mut()
                 .bundle
@@ -614,7 +652,7 @@ impl ProgressCallbacks for FlashProgress {
 
     fn update(&mut self, current: usize) {
         if let Some((addr, total)) = *self.image.lock().unwrap() {
-            self.model.maybe_modify(|state| {
+            self.model.access_mut(|state| {
                 state.provision_mut().bundle.set_status(
                     addr,
                     ProvisioningStatus::InProgress((current * 100 / total) as u8),
@@ -625,7 +663,7 @@ impl ProgressCallbacks for FlashProgress {
 
     fn finish(&mut self) {
         if let Some((addr, _)) = self.image.lock().unwrap().take() {
-            self.model.maybe_modify(|state| {
+            self.model.access_mut(|state| {
                 state
                     .provision_mut()
                     .bundle

@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 
 pub mod dir;
 pub mod http;
@@ -79,6 +79,19 @@ pub trait BundleLoader {
     async fn load<W>(&mut self, write: W, id: Option<&str>) -> anyhow::Result<String>
     where
         W: Write;
+
+    async fn upload_logs<R>(
+        &mut self,
+        _read: R,
+        _id: Option<&str>,
+        _name: &str,
+    ) -> anyhow::Result<()>
+    where
+        R: Read,
+    {
+        // Do nothing by default
+        Ok(())
+    }
 }
 
 impl<T> BundleLoader for &mut T
@@ -90,5 +103,12 @@ where
         W: Write,
     {
         (*self).load(write, id).await
+    }
+
+    async fn upload_logs<R>(&mut self, read: R, id: Option<&str>, name: &str) -> anyhow::Result<()>
+    where
+        R: Read,
+    {
+        (*self).upload_logs(read, id, name).await
     }
 }

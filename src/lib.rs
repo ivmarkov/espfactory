@@ -103,7 +103,7 @@ pub enum BundleIdentification {
 /// - `conf` - The configuration of the factory
 /// - `bundle_dir` - The directory where a loaded bundle is temporarily stored for processing
 /// - `loader` - The loader used to load the bundle
-pub async fn run<T>(conf: &Config, bundle_dir: &Path, loader: T) -> anyhow::Result<()>
+pub async fn run<T>(conf: &Config, bundle_dir: &Path, bundle_loader: T) -> anyhow::Result<()>
 where
     T: loader::BundleLoader,
 {
@@ -120,7 +120,7 @@ where
 
     let result = select(
         View::new(&model, &mut terminal).run(),
-        Task::new(model.clone(), conf, bundle_dir, loader).run(&Input::new(&model)),
+        Task::new(model.clone(), conf, bundle_dir, bundle_loader).run(&Input::new(&model)),
     )
     .coalesce()
     .await;
