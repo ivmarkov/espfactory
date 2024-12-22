@@ -1,5 +1,6 @@
 use core::cmp::Ordering;
 
+use bitflags::bitflags;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::Stylize;
@@ -55,12 +56,7 @@ impl Widget for &Readout {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = render_main(
             Some(" Readouts ".bold()),
-            Some(Line::from(vec![
-                "Readout ".into(),
-                "<chars> + <Enter> ".yellow().bold(),
-                "Reset ".into(),
-                "<Esc> ".yellow().bold(),
-            ])),
+            Keys::INPUT | Keys::RESET | Keys::QUIT,
             area,
             buf,
         );
@@ -188,14 +184,7 @@ impl Widget for &Provision {
                 self.bundle.name.as_str().bold(),
                 " ".into(),
             ])),
-            (!self.provisioning).then(|| {
-                Line::from(vec![
-                    " Provision ".into(),
-                    "<Enter> ".yellow().bold(),
-                    "Quit ".into(),
-                    "<Esc> ".yellow().bold(),
-                ])
-            }),
+            Keys::CONFIRM | Keys::BACK | Keys::QUIT,
             area,
             buf,
         );
@@ -312,8 +301,8 @@ impl Widget for &Provision {
 impl Widget for &Processing {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = render_main(
-            Some(Span::from(" Bundle Preparation ").bold()),
-            Some(Line::from(vec![" Quit ".into(), "<Esc> ".yellow().bold()])),
+            Some(self.title.clone().bold()),
+            Keys::BACK | Keys::QUIT,
             area,
             buf,
         );
@@ -341,16 +330,11 @@ impl Widget for &Status {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = render_main(
             Some(self.title.clone().bold()),
-            Some(if self.error {
-                Line::from(vec![
-                    " Re-try ".into(),
-                    "<Enter> ".yellow().bold(),
-                    "Quit ".into(),
-                    "<Esc> ".yellow().bold(),
-                ])
+            if self.error {
+                Keys::RETRY | Keys::BACK | Keys::QUIT
             } else {
-                Line::from(vec![" Continue ".into(), "<Enter> ".yellow().bold()])
-            }),
+                Keys::CONFIRM | Keys::QUIT
+            },
             area,
             buf,
         );
@@ -367,7 +351,7 @@ impl Widget for &Status {
 
 fn render_main<'a>(
     title: Option<impl Into<Line<'a>>>,
-    instructions: Option<impl Into<Line<'a>>>,
+    keys: Keys,
     area: Rect,
     buf: &mut Buffer,
 ) -> Rect {
@@ -384,8 +368,8 @@ fn render_main<'a>(
         block = block.title_top(title.into().bold().centered().green());
     }
 
-    if let Some(instructions) = instructions {
-        block = block.title_bottom(instructions.into().right_aligned().yellow());
+    if let Some(instructions) = keys.instructions() {
+        block = block.title_bottom(instructions.right_aligned().yellow());
     }
 
     block.on_blue().white().render(layout[0], buf);
@@ -415,4 +399,57 @@ fn render_main<'a>(
     }
 
     layout[0]
+}
+
+bitflags! {
+    struct Keys: u8 {
+        const QUIT = 0b00000;
+        const RETRY = 0b00001;
+        const CONFIRM = 0b00010;
+        const BACK = 0b00100;
+        const RESET = 0b01000;
+        const INPUT = 0b10000;
+    }
+}
+
+impl Keys {
+    fn instructions(&self) -> Option<Line<'static>> {
+        (!self.is_empty()).then(|| {
+            let mut instructions = Vec::new();
+
+            if self.contains(Self::INPUT) {
+                instructions.push(" Readout ".into());
+                instructions.push("<chars> + <Enter>".yellow().bold());
+            }
+
+            if self.contains(Self::CONFIRM) {
+                instructions.push(" Continue ".into());
+                instructions.push("<Enter>".yellow().bold());
+            }
+
+            if self.contains(Self::RETRY) {
+                instructions.push(" Re-try ".into());
+                instructions.push("<Enter>".yellow().bold());
+            }
+
+            if self.contains(Self::BACK) {
+                instructions.push(" Back ".into());
+                instructions.push("<Esc>".yellow().bold());
+            }
+
+            if self.contains(Self::RESET) {
+                instructions.push(" Reset ".into());
+                instructions.push("<Esc>".yellow().bold());
+            }
+
+            if self.contains(Self::QUIT) {
+                instructions.push(" Quit ".into());
+                instructions.push("<Alt-Q>".yellow().bold());
+            }
+
+            instructions.push(" ".into());
+
+            Line::from(instructions)
+        })
+    }
 }

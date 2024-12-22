@@ -221,7 +221,7 @@ where
         input: &Input<'_>,
     ) -> anyhow::Result<(), TaskError> {
         self.model
-            .modify(|state| *state = State::Processing(Processing::new()));
+            .modify(|state| *state = State::Processing(Processing::new(" Read eFuse IDs ")));
 
         Self::process(&self.model.clone(), self.prep_efuse_readouts(), input).await
     }
@@ -355,7 +355,7 @@ where
         });
 
         self.model
-            .modify(|state| *state = State::Processing(Processing::new()));
+            .modify(|state| *state = State::Processing(Processing::new(" Preparing bundle ")));
 
         let bundle_id = match self.conf.bundle_identification {
             BundleIdentification::None => None,

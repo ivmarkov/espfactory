@@ -86,7 +86,7 @@ pub enum State {
 impl State {
     /// Create a new state in the `Processing` state
     pub const fn new() -> Self {
-        Self::Processing(Processing::new())
+        Self::Processing(Processing::empty())
     }
 
     pub fn success(&mut self, title: impl Into<String>, message: impl Into<String>) {
@@ -219,6 +219,8 @@ pub struct Provision {
 /// The state of the model when processing a sub-task
 #[derive(Debug)]
 pub struct Processing {
+    /// The title of the processing (e.g. "Preparing bundle", etc.)
+    pub title: String,
     /// The status of the processing (e.g. "Loading", etc.)
     pub status: String,
     /// A counter helper for displaying a processing progress
@@ -226,18 +228,21 @@ pub struct Processing {
 }
 
 impl Processing {
-    /// Create a new `Preparing` state with empty status
-    pub const fn new() -> Self {
+    const fn empty() -> Self {
         Self {
+            title: String::new(),
             status: String::new(),
             counter: Wrapping(0),
         }
     }
-}
 
-impl Default for Processing {
-    fn default() -> Self {
-        Self::new()
+    /// Create a new `Preparing` state with empty status
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            status: String::new(),
+            counter: Wrapping(0),
+        }
     }
 }
 
