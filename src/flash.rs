@@ -82,6 +82,7 @@ pub fn flash<P>(
     speed: Option<u32>,
     flash_size: Option<FlashSize>,
     flash_data: Vec<FlashData>,
+    dry_run: bool,
     mut progress: P,
 ) -> anyhow::Result<()>
 where
@@ -101,9 +102,13 @@ where
         })
         .collect::<Vec<_>>();
 
-    flasher
-        .write_bins_to_flash(&segments, Some(&mut progress))
-        .context("Flashing failed")?;
+    if !dry_run {
+        flasher
+            .write_bins_to_flash(&segments, Some(&mut progress))
+            .context("Flashing failed")?;
+    } else {
+        info!("Dry run: skipping flashing");
+    }
 
     Ok(())
 }

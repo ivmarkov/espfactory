@@ -32,6 +32,8 @@ mod view;
 /// The configuration of the factory
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
+    /// Do not flash or eFuse, just print the commands that would be executed
+    pub dry_run: bool,
     /// The serial port to use for communication with the device
     ///
     /// If not provided, the first available port where an ESP chip is
@@ -66,6 +68,7 @@ impl Config {
     /// (no port, no bundle identification method, no readouts)
     pub const fn new() -> Self {
         Self {
+            dry_run: true,
             port: None,
             flash_speed: None,
             bundle_identification: BundleIdentification::None,

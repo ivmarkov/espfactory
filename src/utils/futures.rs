@@ -18,19 +18,6 @@ use log::error;
 
 extern crate alloc;
 
-/// An extension trait for `Future` that converts any future injto a fallible future
-pub trait IntoFallibleFuture {
-    /// Convert a future into a fallible future
-    async fn into_fallible<T, E>(self) -> Result<T, E>
-    where
-        Self: Sized + Future<Output = T>,
-    {
-        Ok(self.await)
-    }
-}
-
-impl<T> IntoFallibleFuture for T where T: Future {}
-
 #[allow(unused)]
 pub trait IntoUnitFallibleFuture {
     /// Convert a failible future into a fallible future that returns `()`

@@ -1,3 +1,4 @@
+use core::fmt::{self, Display};
 use core::future::Future;
 
 use std::collections::HashMap;
@@ -11,7 +12,7 @@ use anyhow::Context;
 
 use crossterm::event::KeyCode;
 
-use embassy_futures::select::{select, select3, Either};
+use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_time::{Duration, Ticker};
 
 use espflash::flasher::ProgressCallbacks;
@@ -19,12 +20,13 @@ use espflash::flasher::ProgressCallbacks;
 use log::{error, info};
 
 use crate::bundle::{Bundle, Params, ProvisioningStatus};
-use crate::input::Input;
+use crate::efuse;
+use crate::flash;
+use crate::input::{ConfirmOutcome, Input};
 use crate::loader::BundleLoader;
 use crate::model::{Model, Processing, Provision, Readout, State};
-use crate::utils::futures::{unblock, Coalesce, IntoFallibleFuture};
-use crate::{efuse, flash, LOGGER};
-use crate::{BundleIdentification, Config};
+use crate::utils::futures::unblock;
+use crate::{BundleIdentification, Config, LOGGER};
 
 extern crate alloc;
 
@@ -68,102 +70,141 @@ where
     }
 
     /// Run the factory bundle provisioning task in a loop as follows:
-    /// - Readouts (read the necessary IDs from the user, e.g. test jig ID, PCB ID, box ID)
-    /// - Load and prepare the (next) bundle to be provisioned, possibly using one of the readouts as a bundle ID
+    /// - Step 1: eFuse readouts (read the necessary IDs from the chip eFuse memory)
+    /// - Step 2: Readouts (read the necessary IDs from the user, e.g. test jig ID, PCB ID, box ID)
+    /// - Step 3: Load and prepare the (next) bundle to be provisioned, possibly using one of the readouts as a bundle ID
     ///   by fetching the bundle content using the bundle loader, and then creating a `Bundle` instance
-    /// - Provision the bundle by flashing and optionally efusing the chip with the bundle content
-    /// - Repeat the above steps until the user quits
+    /// - Step 4: Provision the bundle by flashing and optionally efusing the chip with the bundle content
+    /// - Step 5: Save the log output to a file and upload it to the server
+    ///
+    /// Repeat the above steps until the user quits
     ///
     /// Arguments:
     /// - `input` - the input helper to process terminal events
     ///   Necessary as some states require direct user input (e.g. readouts)
     pub async fn run(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
-        'outer: loop {
+        loop {
             {
                 let log_file = super::logger::file::start()?;
-
                 LOGGER.lock(|logger| logger.swap_out(Some(log_file)));
             }
-
-            let mut summary = HashMap::<String, String>::new();
 
             let _guard = scopeguard::guard((), |_| {
                 LOGGER.lock(|logger| logger.swap_out(None));
             });
 
-            let bundle_id = loop {
-                if Self::handle(
-                    &self.model.clone(),
-                    self.prepare_efuse_readouts(input),
-                    "Preparing eFuse readouts failed",
-                    input,
-                )
-                .await?
-                .is_none()
-                {
-                    continue;
-                }
+            let (bundle_id, bundle_name, summary) = 'steps: loop {
+                let mut summary = HashMap::<String, String>::new();
 
-                if !self.readout(input).await {
-                    return Ok(());
-                }
+                let bundle_id = loop {
+                    summary.clear();
 
-                self.model.access(|state| {
-                    let readout = state.readout();
+                    let result = Self::handle(
+                        &self.model.clone(),
+                        self.step1_prepare_efuse_readout(input),
+                        "Preparing eFuse readouts failed",
+                        input,
+                    )
+                    .await;
 
-                    for (name, value) in &readout.efuse_readouts {
-                        summary.insert(name.clone(), value.clone());
+                    match result {
+                        Ok(_) => (),
+                        Err(TaskError::Canceled) | Err(TaskError::Retry) => continue,
+                        Err(other) => Err(other)?,
                     }
 
-                    for (name, value) in &readout.readouts {
-                        summary.insert(name.clone(), value.clone());
+                    let result = self.step2_readout(input).await;
+
+                    match result {
+                        Ok(_) => (),
+                        Err(TaskError::Canceled) => continue,
+                        Err(TaskError::Retry) => unreachable!(),
+                        Err(other) => Err(other)?,
                     }
-                });
 
-                if let Some(bundle_id) = Self::handle(
-                    &self.model.clone(),
-                    self.prepare(input),
-                    "Preparing a bundle failed",
-                    input,
-                )
-                .await?
-                {
-                    break bundle_id;
-                }
+                    self.model.access(|state| {
+                        let readout = state.readout();
+
+                        for (name, value) in &readout.efuse_readouts {
+                            summary.insert(name.clone(), value.clone());
+                        }
+
+                        for (name, value) in &readout.readouts {
+                            summary.insert(name.clone(), value.clone());
+                        }
+                    });
+
+                    break loop {
+                        // TODO: Not very efficient
+                        let readout = self.model.access(|state| state.readout().clone());
+
+                        let result = Self::handle(
+                            &self.model.clone(),
+                            self.step3_prepare(input),
+                            "Preparing a bundle failed",
+                            input,
+                        )
+                        .await;
+
+                        match result {
+                            Ok(bundle_id) => break bundle_id,
+                            Err(TaskError::Canceled) => continue 'steps,
+                            Err(TaskError::Retry) => {
+                                self.model.modify(|state| *state = State::Readout(readout));
+
+                                continue;
+                            }
+                            Err(other) => Err(other)?,
+                        };
+                    };
+                };
+
+                break loop {
+                    if !self.conf.skip_confirmations {
+                        match input.wait_confirm().await.into() {
+                            Ok(_) => (),
+                            Err(TaskError::Canceled) => continue 'steps,
+                            Err(TaskError::Retry) => unreachable!(),
+                            Err(other) => Err(other)?,
+                        }
+                    }
+
+                    // TODO: Not very efficient
+                    let provision = self.model.access(|state| state.provision().clone());
+
+                    let result = Self::handle(
+                        &self.model.clone(),
+                        self.step4_provision(input),
+                        &format!("Provisioning bundle `{}` failed", provision.bundle.name),
+                        input,
+                    )
+                    .await;
+
+                    match result {
+                        Ok(_) => break (bundle_id, provision.bundle.name.clone(), summary),
+                        Err(TaskError::Canceled) => continue 'steps,
+                        Err(TaskError::Retry) => {
+                            self.model
+                                .modify(|state| *state = State::Provision(provision));
+
+                            continue;
+                        }
+                        Err(other) => Err(other)?,
+                    }
+                };
             };
 
-            let provision = loop {
-                if !self.conf.skip_confirmations && !input.wait_quit_or(KeyCode::Enter).await {
-                    continue 'outer;
-                }
-
-                // TODO: Not very efficient
-                let provision = self.model.access(|state| state.provision().clone());
-
-                if Self::handle(
-                    &self.model.clone(),
-                    self.provision(input),
-                    &format!("Provisioning bundle `{}` failed", provision.bundle.name),
-                    input,
-                )
-                .await?
-                .is_some()
-                {
-                    break provision;
-                } else {
-                    self.model
-                        .modify(|state| *state = State::Provision(provision));
-                }
-            };
-
+            // Step 5
             if let Some(log_file) = LOGGER.lock(|logger| logger.swap_out(None)) {
                 let log = super::logger::file::finish(log_file, &summary)?;
                 self.bundle_loader
-                    .upload_logs(log, bundle_id.as_deref(), &provision.bundle.name)
+                    .upload_logs(log, bundle_id.as_deref(), &bundle_name)
                     .await?;
             }
 
-            if !self.conf.skip_confirmations && !input.wait_quit_or(KeyCode::Enter).await {
+            if !self.conf.skip_confirmations
+                && matches!(input.wait_confirm().await, ConfirmOutcome::Quit)
+            {
                 break;
             }
         }
@@ -171,9 +212,24 @@ where
         Ok(())
     }
 
+    /// Step 1:
+    /// Prepare the eFuse readouts by reading those from the chip eFuse memory
+    ///
+    /// Displays a progress info while reading the eFuse values
+    async fn step1_prepare_efuse_readout(
+        &mut self,
+        input: &Input<'_>,
+    ) -> anyhow::Result<(), TaskError> {
+        self.model
+            .modify(|state| *state = State::Processing(Processing::new()));
+
+        Self::process(&self.model.clone(), self.prep_efuse_readouts(), input).await
+    }
+
+    /// Step 2:
     /// Process the readouts state by visualizing the eFuse readouts (if any) and
     /// reading the necessary IDs from the user (if any)
-    async fn readout(&mut self, input: &Input<'_>) -> bool {
+    async fn step2_readout(&mut self, input: &Input<'_>) -> Result<(), TaskError> {
         let init = |readouts: &mut Readout| {
             readouts.readouts.clear();
             readouts.active = 0;
@@ -202,27 +258,27 @@ where
             init(readouts);
         });
 
-        while !self.model.access(|state| state.readout().is_ready()) {
-            let key = input.get().await;
+        let mut result = Ok(());
 
-            let mut quit = false;
+        while result.is_ok() && !self.model.access(|state| state.readout().is_ready()) {
+            let key = input.get().await;
 
             self.model.access_mut(|state| {
                 let readouts = state.readout_mut();
 
                 let readout = &mut readouts.readouts[readouts.active];
 
-                match key {
-                    KeyCode::Enter => {
+                match Input::key_m(&key) {
+                    Input::NEXT => {
                         if !readout.1.is_empty() {
                             readouts.active += 1;
                             info!("Readout `{}`: `{}`", readout.0, readout.1);
                             return true;
                         }
                     }
-                    KeyCode::Esc => {
+                    Input::PREV => {
                         if readouts.active == 0 && readout.1.is_empty() {
-                            quit = true;
+                            result = Err(TaskError::Canceled);
                             return false;
                         }
 
@@ -230,40 +286,40 @@ where
                         info!("Readouts reset");
                         return true;
                     }
-                    KeyCode::Backspace => {
-                        readout.1.pop();
-                        return true;
+                    Input::QUIT => {
+                        result = Err(TaskError::Quit);
+                        return false;
                     }
-                    KeyCode::Char(ch) => {
-                        readout.1.push(ch);
-                        return true;
+                    (modifiers, code) => {
+                        if modifiers.is_empty() {
+                            match code {
+                                KeyCode::Backspace => {
+                                    readout.1.pop();
+                                    return true;
+                                }
+                                KeyCode::Char(ch) => {
+                                    readout.1.push(ch);
+                                    return true;
+                                }
+                                _ => (),
+                            }
+                        }
                     }
-                    _ => (),
                 }
 
                 false
             });
-
-            if quit {
-                return false;
-            }
         }
 
-        true
+        result
     }
 
-    /// Prepare the eFuse readouts by reading those from the chip eFuse memory
-    ///
-    /// Displays a progress info while reading the eFuse values
-    async fn prepare_efuse_readouts(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
-        self.model
-            .modify(|state| *state = State::Processing(Processing::new()));
-
-        Self::process(&self.model.clone(), self.prep_efuse_readouts(), input).await
-    }
-
+    /// Step 3:
     /// Prepare the bundle to be provisioned by loading it from the storage
-    async fn prepare(&mut self, input: &Input<'_>) -> anyhow::Result<Option<String>> {
+    async fn step3_prepare(
+        &mut self,
+        input: &Input<'_>,
+    ) -> anyhow::Result<Option<String>, TaskError> {
         let (_test_jig_id, pcb_id, box_id) = self.model.access(|state| {
             let readouts = state.readout();
             let mut offset = 0;
@@ -315,6 +371,71 @@ where
         .await?;
 
         Ok(bundle_id)
+    }
+
+    /// Step 4:
+    /// Provision the bundle by flashing and optionally efusing the chip with the bundle content
+    async fn step4_provision(&mut self, input: &Input<'_>) -> anyhow::Result<(), TaskError> {
+        match select(self.prov_bundle(), input.swallow()).await {
+            Either::First(result) => result.map_err(TaskError::Other),
+        }
+    }
+
+    //
+    // Helper methods
+    //
+
+    /// Prepare the eFuse readouts by reading those from the chip eFuse memory
+    async fn prep_efuse_readouts(&mut self) -> anyhow::Result<()> {
+        static EFUSE_VALUES: &[&str] = &[
+            "MAC",
+            "WAFER_VERSION_MAJOR",
+            "WAFER_VERSION_MINOR",
+            // Not available on all chips
+            "OPTIONAL_UNIQUE_ID",
+            "FLASH_TYPE",
+            "FLASH_VENDOR",
+            "FLASH_CAP",
+            "PSRAM_CAP",
+            "PSRAM_TYPE",
+            "PSRAMP_VENDOR",
+        ];
+
+        self.model.modify(|state| {
+            state.processing_mut().status = "Reading Chip IDs from eFuse".to_string();
+        });
+
+        info!("About to read Chip IDs from eFuse");
+
+        let efuse_values = unblock("efuse", || {
+            let tools = esptools::Tools::mount().context("Mounting esptools failed")?;
+
+            let efuse_values = efuse::summary(&tools, EFUSE_VALUES.iter().copied())?;
+
+            let efuse_values = efuse_values
+                .iter()
+                .filter_map(|(k, v)| {
+                    v.value.as_str().and_then(|v| {
+                        EFUSE_VALUES
+                            .iter()
+                            .find(|&x| x == k)
+                            .map(|&x| (x.to_string(), v.to_string()))
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            Ok(efuse_values)
+        })
+        .await?;
+
+        for (key, value) in efuse_values.iter() {
+            info!("Chip {key}: {value}");
+        }
+
+        self.model
+            .modify(move |state| *state = State::Readout(Readout::new_with_efuse(efuse_values)));
+
+        Ok(())
     }
 
     /// Load the bundle from the storage of the bundle loader into the bundle workspace directory
@@ -403,59 +524,6 @@ where
         Ok(bundle)
     }
 
-    /// Prepare the eFuse readouts by reading those from the chip eFuse memory
-    async fn prep_efuse_readouts(&mut self) -> anyhow::Result<()> {
-        static EFUSE_VALUES: &[&str] = &[
-            "MAC",
-            "WAFER_VERSION_MAJOR",
-            "WAFER_VERSION_MINOR",
-            // Not available on all chips
-            "OPTIONAL_UNIQUE_ID",
-            "FLASH_TYPE",
-            "FLASH_VENDOR",
-            "FLASH_CAP",
-            "PSRAM_CAP",
-            "PSRAM_TYPE",
-            "PSRAMP_VENDOR",
-        ];
-
-        self.model.modify(|state| {
-            state.processing_mut().status = "Reading Chip IDs from eFuse".to_string();
-        });
-
-        info!("About to read Chip IDs from eFuse");
-
-        let efuse_values = unblock("efuse", || {
-            let tools = esptools::Tools::mount().context("Mounting esptools failed")?;
-
-            let efuse_values = efuse::summary(&tools, EFUSE_VALUES.iter().copied())?;
-
-            let efuse_values = efuse_values
-                .iter()
-                .filter_map(|(k, v)| {
-                    v.value.as_str().and_then(|v| {
-                        EFUSE_VALUES
-                            .iter()
-                            .find(|&x| x == k)
-                            .map(|&x| (x.to_string(), v.to_string()))
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            Ok(efuse_values)
-        })
-        .await?;
-
-        for (key, value) in efuse_values.iter() {
-            info!("Chip {key}: {value}");
-        }
-
-        self.model
-            .modify(move |state| *state = State::Readout(Readout::new_with_efuse(efuse_values)));
-
-        Ok(())
-    }
-
     /// Prepare the bundle to be provisioned by creating a `Bundle` instance from the loaded bundle content
     /// in the bundle workspace directory
     async fn prep_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<()> {
@@ -490,12 +558,6 @@ where
     }
 
     /// Provision the bundle by flashing and optionally efusing the chip with the bundle content
-    async fn provision(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
-        match select(self.prov_bundle(), input.swallow()).await {
-            Either::First(result) => result,
-        }
-    }
-
     async fn prov_bundle(&mut self) -> anyhow::Result<()> {
         self.model.modify(|state| {
             let ps = state.provision_mut();
@@ -524,6 +586,7 @@ where
         let flash_port = self.conf.port.clone();
         let flash_speed = self.conf.flash_speed;
         let flash_model = self.model.clone();
+        let dry_run = self.conf.dry_run;
 
         unblock("flash", move || {
             flash::flash(
@@ -532,6 +595,7 @@ where
                 flash_speed,
                 flash_size,
                 flash_data,
+                dry_run,
                 FlashProgress::new(flash_model),
             )
         })
@@ -563,54 +627,67 @@ where
         Ok(())
     }
 
+    /// Handle a future failure by displaying an error message and waiting for a confirmation
     async fn handle<F, R>(
         model: &Model,
         fut: F,
         err_msg: &str,
         input: &Input<'_>,
-    ) -> anyhow::Result<Option<R>>
+    ) -> anyhow::Result<R, TaskError>
     where
-        F: Future<Output = anyhow::Result<R>>,
+        F: Future<Output = anyhow::Result<R, TaskError>>,
     {
-        match fut.await {
-            Ok(result) => Ok(Some(result)),
-            Err(err) => {
-                error!("{err_msg}: {err:?}");
+        let result = fut.await;
 
-                model.modify(|state| {
-                    state.error(format!(" {err_msg} "), format!("{err_msg}: {err:?}"))
-                });
+        if let Err(TaskError::Other(err)) = result {
+            error!("{err_msg}: {err:?}");
 
-                if !input.wait_quit_or(KeyCode::Enter).await {
-                    return Err(err);
-                }
+            model
+                .modify(|state| state.error(format!(" {err_msg} "), format!("{err_msg}: {err:?}")));
 
-                Ok(None)
+            match input.wait_confirm().await.into() {
+                Ok(_) => Err(TaskError::Retry),
+                Err(err) => Err(err),
             }
+        } else {
+            result
         }
     }
 
-    async fn process<F>(model: &Model, fut: F, input: &Input<'_>) -> anyhow::Result<()>
+    /// Process a future by incrementing a counter every 100 ms while the future is running
+    async fn process<F, R>(model: &Model, fut: F, input: &Input<'_>) -> anyhow::Result<R, TaskError>
     where
-        F: Future<Output = anyhow::Result<()>>,
+        F: Future<Output = anyhow::Result<R>>,
     {
-        select3(
+        let result = select3(
             Self::tick(Duration::from_millis(100), || {
                 model.modify(|state| {
                     if let State::Processing(Processing { counter, .. }) = state {
                         *counter += 1;
                     }
                 })
-            })
-            .into_fallible(),
-            input.wait_quit().into_fallible(),
+            }),
+            input.wait_cancel(),
             fut,
         )
-        .coalesce()
-        .await
+        .await;
+
+        let result = match result {
+            Either3::Second(outcome) => {
+                let Err(err) = outcome.into() else {
+                    unreachable!()
+                };
+
+                return Err(err);
+            }
+            Either3::Third(result) => result?,
+        };
+
+        Ok(result)
     }
 
-    async fn tick<F>(duration: Duration, mut f: F)
+    /// A helper to increment a counter every 100 ms
+    async fn tick<F>(duration: Duration, mut f: F) -> !
     where
         F: FnMut(),
     {
@@ -672,3 +749,45 @@ impl ProgressCallbacks for FlashProgress {
         }
     }
 }
+
+/// A task step error
+#[derive(Debug)]
+enum TaskError {
+    /// Retry the step by user request
+    Retry,
+    /// Go to the previous step by user request
+    Canceled,
+    /// Quit the app by user request
+    Quit,
+    /// Other error - display the error message or quit the app depending on the context
+    Other(anyhow::Error),
+}
+
+impl From<anyhow::Error> for TaskError {
+    fn from(err: anyhow::Error) -> Self {
+        TaskError::Other(err)
+    }
+}
+
+impl From<ConfirmOutcome> for Result<(), TaskError> {
+    fn from(outcome: ConfirmOutcome) -> Self {
+        match outcome {
+            ConfirmOutcome::Confirmed => Ok(()),
+            ConfirmOutcome::Canceled => Err(TaskError::Canceled),
+            ConfirmOutcome::Quit => Err(TaskError::Quit),
+        }
+    }
+}
+
+impl Display for TaskError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TaskError::Retry => write!(f, "Retry"),
+            TaskError::Canceled => write!(f, "Canceled"),
+            TaskError::Quit => write!(f, "Quit"),
+            TaskError::Other(err) => write!(f, "Error: {err:#}"),
+        }
+    }
+}
+
+impl std::error::Error for TaskError {}

@@ -165,7 +165,7 @@ impl Default for State {
 }
 
 /// The readouts state of the model
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Readout {
     /// The eFuse readouts to display
     /// Each readout is a tuple of the eFuse key and its stringified value

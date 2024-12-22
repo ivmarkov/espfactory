@@ -82,6 +82,8 @@ impl Verbosity {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 //#[cfg_attr(feature = "bin", )]
 pub struct Config {
+    /// Whether to run in dry-run mode
+    pub dry_run: bool,
     /// The serial port to use for communication with the device
     ///
     /// If not provided, the first available port where an ESP chip is
@@ -128,6 +130,7 @@ impl Config {
     /// (no port, no bundle identification method, no readouts)
     pub const fn new() -> Self {
         Self {
+            dry_run: true,
             port: None,
             flash_speed: None,
             bundle_source: None,
@@ -142,6 +145,7 @@ impl Config {
     /// Convert the configuration to the library configuration format
     pub fn to_lib_config(&self) -> espfactory::Config {
         espfactory::Config {
+            dry_run: self.dry_run,
             port: self.port.as_ref().cloned(),
             flash_speed: self.flash_speed,
             bundle_identification: self.bundle_identification.unwrap_or_default(),
@@ -196,6 +200,7 @@ fn main() -> anyhow::Result<()> {
         toml::from_str(&std::fs::read_to_string(conf)?)?
     } else {
         Config {
+            dry_run: true,
             port: None,
             flash_speed: None,
             bundle_source: None,

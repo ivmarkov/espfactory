@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
@@ -10,6 +10,13 @@ use crate::model::Model;
 
 extern crate alloc;
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum ConfirmOutcome {
+    Confirmed,
+    Canceled,
+    Quit,
+}
+
 /// A helper for procressing input events from the terminal
 pub struct Input<'a> {
     model: &'a Model,
@@ -17,6 +24,10 @@ pub struct Input<'a> {
 }
 
 impl<'a> Input<'a> {
+    pub const PREV: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Esc);
+    pub const NEXT: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Enter);
+    pub const QUIT: (KeyModifiers, KeyCode) = (KeyModifiers::ALT, KeyCode::Char('q'));
+
     /// Creates a new `Input` instance with the given model
     ///
     /// The model is necessary only so that the input can automatically trigger redraws on terminal resize events
@@ -27,30 +38,35 @@ impl<'a> Input<'a> {
         }
     }
 
-    /// Waits for the user to press the `Esc` key swallowing all other key presses
-    pub async fn wait_quit(&self) {
+    /// Waits for the user to:
+    /// - Go back to the previous step with `Esc`
+    /// - or to quit the application with `q`
+    pub async fn wait_cancel(&self) -> ConfirmOutcome {
         loop {
-            if self.get().await == KeyCode::Esc {
-                break;
+            match Self::key_m(&self.get().await) {
+                Self::PREV => break ConfirmOutcome::Canceled,
+                Self::QUIT => break ConfirmOutcome::Quit,
+                _ => (),
             }
         }
     }
 
-    /// Waits for the user to press the `Esc` key or the given key code swallowing all other key presses
-    pub async fn wait_quit_or(&self, code: KeyCode) -> bool {
+    /// Waits for the user to:
+    /// - Confirm the next step with `Enter`
+    /// - or to go back to the previous step with `Esc`
+    /// - or to quit the application with `q`
+    pub async fn wait_confirm(&self) -> ConfirmOutcome {
         loop {
-            let got = self.get().await;
-
-            if got == code {
-                return true;
-            } else if got == KeyCode::Esc {
-                return false;
+            match Self::key_m(&self.get().await) {
+                Self::NEXT => break ConfirmOutcome::Confirmed,
+                Self::PREV => break ConfirmOutcome::Canceled,
+                Self::QUIT => break ConfirmOutcome::Quit,
+                _ => (),
             }
         }
     }
 
     /// Swallows all key presses
-    #[allow(unused)]
     pub async fn swallow(&self) -> ! {
         loop {
             self.get().await;
@@ -58,7 +74,7 @@ impl<'a> Input<'a> {
     }
 
     /// Gets the next key press event
-    pub async fn get(&self) -> KeyCode {
+    pub async fn get(&self) -> KeyEvent {
         self.pump.start();
 
         loop {
@@ -66,13 +82,17 @@ impl<'a> Input<'a> {
                 // It's important to check that the event is a key press event as
                 // crossterm also emits key release and repeat events on Windows.
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                    return key_event.code;
+                    return key_event;
                 }
                 // Fake a dirty model to force redraw on resize
                 Event::Resize(_, _) => self.model.modify(|_| {}),
                 _ => {}
             }
         }
+    }
+
+    pub fn key_m(event: &KeyEvent) -> (KeyModifiers, KeyCode) {
+        (event.modifiers, event.code)
     }
 }
 
