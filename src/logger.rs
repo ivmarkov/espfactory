@@ -16,7 +16,7 @@ pub type LogFile = File;
 
 /// The global logger used by the factory
 pub static LOGGER: Logger<LogFile, Arc<Signal<CriticalSectionRawMutex, ()>>> =
-    Logger::new(LevelFilter::Debug, LevelFilter::Info, 10);
+    Logger::new(LevelFilter::Info, LevelFilter::Info, 20);
 
 /// A trait for signaling that a log message has been written
 pub trait LogSignal {
@@ -235,7 +235,7 @@ pub mod file {
 
     pub fn finish<'i, I, S>(mut log: LogFile, summary: I) -> anyhow::Result<impl Read>
     where
-        I: IntoIterator<Item = (&'i S, &'i S)>,
+        I: IntoIterator<Item = &'i (S, S)>,
         S: AsRef<str> + 'i,
     {
         let mut log_zip_file = tempfile()?;
@@ -245,14 +245,16 @@ pub mod file {
 
         log.flush()?;
         log.seek(SeekFrom::Start(0))?;
-        
+
         std::io::copy(&mut log, &mut log_zip)?;
+
+        drop(log);
 
         log_zip.start_file("log.csv", FileOptions::<()>::default())?;
 
         let mut csv = csv::WriterBuilder::new()
             .has_headers(true)
-            .from_writer(&mut log);
+            .from_writer(&mut log_zip);
 
         csv.serialize(("Name", "Value"))?;
 
@@ -262,6 +264,7 @@ pub mod file {
 
         csv.flush()?;
 
+        drop(csv);
         drop(log_zip);
 
         log_zip_file.flush()?;

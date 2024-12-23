@@ -288,7 +288,12 @@ impl BundleLoader for S3Loader {
             .put_object()
             .bucket(logs_upload_bucket)
             .key(key)
-            .body(ByteStream::read_from().file(temp_file.into()).build().await?)
+            .body(
+                ByteStream::read_from()
+                    .file(temp_file.into())
+                    .build()
+                    .await?,
+            )
             .send()
             .await
             .context("Uploading bundle logs failed")?;

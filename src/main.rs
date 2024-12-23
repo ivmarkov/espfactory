@@ -191,12 +191,7 @@ impl BundleLoader for Loader {
         }
     }
 
-    async fn upload_logs<R>(
-        &mut self,
-        read: R,
-        id: Option<&str>,
-        name: &str,
-    ) -> anyhow::Result<()>
+    async fn upload_logs<R>(&mut self, read: R, id: Option<&str>, name: &str) -> anyhow::Result<()>
     where
         R: std::io::Read,
     {

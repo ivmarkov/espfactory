@@ -1,7 +1,6 @@
 use core::fmt::{self, Display};
 use core::future::Future;
 
-use std::collections::HashMap;
 use std::fs::{self, DirEntry, File};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -94,7 +93,7 @@ where
             });
 
             let (bundle_id, bundle_name, summary) = 'steps: loop {
-                let mut summary = HashMap::<String, String>::new();
+                let mut summary = Vec::new();
 
                 let bundle_id = loop {
                     summary.clear();
@@ -126,11 +125,11 @@ where
                         let readout = state.readout();
 
                         for (name, value) in &readout.efuse_readouts {
-                            summary.insert(name.clone(), value.clone());
+                            summary.push((name.clone(), value.clone()));
                         }
 
                         for (name, value) in &readout.readouts {
-                            summary.insert(name.clone(), value.clone());
+                            summary.push((name.clone(), value.clone()));
                         }
                     });
 
@@ -579,7 +578,7 @@ where
         });
 
         info!(
-            "About to flash data:\nChip: {chip:?}\nFlash Size: {flash_size:?}\nImages N: {}",
+            "About to flash data:Chip: {chip:?}, Flash Size: {flash_size:?}, Images N: {}",
             flash_data.len()
         );
 

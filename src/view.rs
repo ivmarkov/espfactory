@@ -355,7 +355,7 @@ fn render_main<'a>(
     area: Rect,
     buf: &mut Buffer,
 ) -> Rect {
-    let layout = Layout::vertical([Constraint::Percentage(100), Constraint::Length(4)]).split(area);
+    let layout = Layout::vertical([Constraint::Percentage(100), Constraint::Length(6)]).split(area);
 
     let mut block = Block::bordered().title_top(
         Line::from(" ESP32 Factory Provisioning ")
@@ -413,6 +413,7 @@ bitflags! {
 }
 
 impl Keys {
+    /// Render the instructions for the keys to be displayed
     fn instructions(&self) -> Option<Line<'static>> {
         (!self.is_empty()).then(|| {
             let mut instructions = Vec::new();
