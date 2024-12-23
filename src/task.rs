@@ -82,6 +82,21 @@ where
     /// - `input` - the input helper to process terminal events
     ///   Necessary as some states require direct user input (e.g. readouts)
     pub async fn run(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
+        let result = self.step(input).await;
+
+        match result {
+            Err(TaskError::Quit) => {
+                info!("Quit by user request");
+                Ok(())
+            }
+            Err(TaskError::Other(err)) => Err(err)?,
+            Ok(_) | Err(TaskError::Canceled) | Err(TaskError::Retry) => {
+                unreachable!("Task canceled or retry by user request");
+            }
+        }
+    }
+
+    async fn step(&mut self, input: &Input<'_>) -> Result<(), TaskError> {
         loop {
             {
                 let log_file = super::logger::file::start()?;
