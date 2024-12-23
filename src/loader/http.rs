@@ -4,6 +4,8 @@ use anyhow::Context;
 
 use log::info;
 
+use reqwest::blocking::Body;
+
 use super::BundleLoader;
 
 /// A loader that reads bundles from an HTTP(S) server.
@@ -24,8 +26,9 @@ use super::BundleLoader;
 /// is assumed to be the ID of the bundle with the `.bundle` extension, or a random name with the `.bundle` extension if the ID is not present
 #[derive(Debug, Clone)]
 pub struct HttpLoader {
-    url: String,
+    load_url: String,
     auth: Option<String>,
+    logs_upload_url: Option<String>,
 }
 
 impl HttpLoader {
@@ -36,8 +39,16 @@ impl HttpLoader {
     /// - `auth`: An optional authorization token to use when loading the bundles
     ///           If present, it will be used as the value of the `Authorization` header
     ///           in the request
-    pub const fn new(url: String, auth: Option<String>) -> Self {
-        Self { url, auth }
+    pub const fn new(
+        load_url: String,
+        auth: Option<String>,
+        logs_upload_url: Option<String>,
+    ) -> Self {
+        Self {
+            load_url,
+            auth,
+            logs_upload_url,
+        }
     }
 }
 
@@ -49,18 +60,21 @@ impl BundleLoader for HttpLoader {
         if let Some(id) = id {
             info!(
                 "About to fetch a bundle with ID `{id}` from URL `{}`...",
-                self.url
+                self.load_url
             );
         } else {
-            info!("About to fetch a random bundle from URL `{}`...", self.url);
+            info!(
+                "About to fetch a random bundle from URL `{}`...",
+                self.load_url
+            );
         }
 
         let client = reqwest::Client::new();
 
         let mut builder = if let Some(id) = id {
-            client.get(&self.url).query(&[("id", id)])
+            client.get(&self.load_url).query(&[("id", id)])
         } else {
-            client.post(&self.url)
+            client.post(&self.load_url)
         };
 
         if let Some(auth) = self.auth.as_deref() {
@@ -101,16 +115,51 @@ impl BundleLoader for HttpLoader {
         Ok(bundle_name)
     }
 
-    async fn upload_logs<R>(
-        &mut self,
-        _read: R,
-        _id: Option<&str>,
-        _name: &str,
-    ) -> anyhow::Result<()>
+    async fn upload_logs<R>(&mut self, read: R, id: Option<&str>, name: &str) -> anyhow::Result<()>
     where
         R: Read,
     {
-        // Do nothing by default
+        let Some(logs_upload_url) = self.logs_upload_url.as_deref() else {
+            return Ok(());
+        };
+
+        if let Some(id) = id {
+            info!(
+                "About to upload logs `{name}.log.zip` for ID `{id}` to URL `{logs_upload_url}`..."
+            );
+        } else {
+            info!("About to uploads logs `{name}` to URL `{logs_upload_url}`...");
+        }
+
+        let client = reqwest::Client::new();
+
+        let mut builder = if let Some(id) = id {
+            client.post(&self.load_url).query(&[("id", id)])
+        } else {
+            client.post(&self.load_url)
+        };
+
+        builder = builder.header(
+            "Content-Disposition",
+            format!("attachment; filename=\"{name}.log.zip\""),
+        );
+
+        if let Some(auth) = self.auth.as_deref() {
+            builder = builder.header("Authorization", auth);
+        }
+
+        // TODO
+        //builder = builder.body(Body::new(read));
+
+        builder
+            .send()
+            .await
+            .context("Request failed")?
+            .error_for_status()
+            .context("Request returned an error status")?;
+
+        info!("Logs `{name}.log.zip` uploaded");
+
         Ok(())
     }
 }

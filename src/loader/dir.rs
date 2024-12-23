@@ -1,4 +1,4 @@
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
@@ -22,6 +22,7 @@ use super::BundleLoader;
 pub struct DirLoader {
     path: PathBuf,
     delete_after_load: bool,
+    logs_path: Option<PathBuf>,
 }
 
 impl DirLoader {
@@ -31,10 +32,11 @@ impl DirLoader {
     /// - `path`: The path to the directory to load the bundles from
     /// - `delete_after_load`: A flag indicating whether the loaded bundle should be deleted from the directory after loading
     ///   Only used when a bundle is loaded without a supplied ID (i.e. a random bundle)
-    pub const fn new(path: PathBuf, delete_after_load: bool) -> Self {
+    pub const fn new(path: PathBuf, delete_after_load: bool, logs_path: Option<PathBuf>) -> Self {
         Self {
             path,
             delete_after_load,
+            logs_path,
         }
     }
 }
@@ -119,14 +121,35 @@ impl BundleLoader for DirLoader {
 
     async fn upload_logs<R>(
         &mut self,
-        _read: R,
-        _id: Option<&str>,
-        _name: &str,
+        mut read: R,
+        id: Option<&str>,
+        name: &str,
     ) -> anyhow::Result<()>
     where
         R: Read,
     {
-        // Do nothing by default
+        let Some(logs_path) = self.logs_path.as_deref() else {
+            return Ok(());
+        };
+
+        if let Some(id) = id {
+            info!(
+                "About to save logs `{name}.log.zip` for ID `{id}` to directory `{}`...",
+                logs_path.display()
+            );
+        } else {
+            info!(
+                "About to save logs `{name}.log.zip` to directory `{}`...",
+                logs_path.display()
+            )
+        }
+
+        let mut file = File::create(logs_path.join(format!("{}.log.zip", name)))
+            .context("Saving the bundle log failed")?;
+        io::copy(&mut read, &mut file).context("Saving the bundle log failed")?;
+
+        info!("Logs `{name}.log.zip` uploaded");
+
         Ok(())
     }
 }

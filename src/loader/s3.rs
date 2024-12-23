@@ -254,12 +254,12 @@ impl BundleLoader for S3Loader {
 
         if let Some(id) = id {
             info!(
-                "About to upload logs `{name}` for ID `{id}` to S3 bucket `{}`...",
+                "About to upload logs `{name}.log.zip` for ID `{id}` to S3 bucket `{}`...",
                 BucketWithPrefix::new(logs_upload_bucket, self.logs_upload_prefix.as_deref())
             );
         } else {
             info!(
-                "About to uploads logs `{name}` to S3 bucket `{}`...",
+                "About to uploads logs `{name}.log.zip` to S3 bucket `{}`...",
                 BucketWithPrefix::new(logs_upload_bucket, self.logs_upload_prefix.as_deref())
             );
         }
@@ -278,11 +278,15 @@ impl BundleLoader for S3Loader {
             .map(|prefix| format!("{prefix}/{name}.log.zip"))
             .unwrap_or(format!("{name}.log.zip"));
 
-        let mut temp_file = tempfile()?;
-        std::io::copy(&mut read, &mut temp_file)?;
+        let mut temp_file = tempfile().context("Uploading the bundle log failed")?;
+        std::io::copy(&mut read, &mut temp_file).context("Uploading the bundle log failed")?;
 
-        temp_file.flush()?;
-        temp_file.seek(SeekFrom::Start(0))?;
+        temp_file
+            .flush()
+            .context("Uploading the bundle log failed")?;
+        temp_file
+            .seek(SeekFrom::Start(0))
+            .context("Uploading the bundle log failed")?;
 
         client
             .put_object()
@@ -292,13 +296,14 @@ impl BundleLoader for S3Loader {
                 ByteStream::read_from()
                     .file(temp_file.into())
                     .build()
-                    .await?,
+                    .await
+                    .context("Uploading the bundle log failed")?,
             )
             .send()
             .await
-            .context("Uploading bundle logs failed")?;
+            .context("Uploading the bundle log failed")?;
 
-        info!("Logs `{name}` uploaded");
+        info!("Logs `{name}.log.zip` uploaded");
 
         Ok(())
     }

@@ -37,14 +37,18 @@ pub enum BundleSource {
         #[arg(short = 'd', long)]
         delete_after_load: bool,
 
-        path: PathBuf,
+        load_path: PathBuf,
+
+        logs_upload_path: Option<PathBuf>,
     },
     /// Load bundles from an HTTP(s) server
     Http {
         #[arg(short = 'a', long)]
         authorization: Option<String>,
 
-        uri: String,
+        load_url: String,
+
+        logs_upload_url: Option<String>,
     },
     /// Load bundles from an S3 bucket
     #[cfg(feature = "s3")]
@@ -231,12 +235,15 @@ fn main() -> anyhow::Result<()> {
         .or(conf.bundle_source.clone())
         .map(|command| match command {
             BundleSource::Dir {
-                path,
+                load_path: path,
                 delete_after_load,
-            } => Loader::Dir(DirLoader::new(path, delete_after_load)),
-            BundleSource::Http { uri, authorization } => {
-                Loader::Http(HttpLoader::new(uri, authorization))
-            }
+                logs_upload_path,
+            } => Loader::Dir(DirLoader::new(path, delete_after_load, logs_upload_path)),
+            BundleSource::Http {
+                load_url,
+                authorization,
+                logs_upload_url,
+            } => Loader::Http(HttpLoader::new(load_url, authorization, logs_upload_url)),
             #[cfg(feature = "s3")]
             BundleSource::S3 {
                 load_path,
