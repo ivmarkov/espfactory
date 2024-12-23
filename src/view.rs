@@ -208,61 +208,82 @@ impl Widget for &Provision {
 
         Table::new(
             self.bundle.parts_mapping.iter().map(|mapping| {
-                let row = Row::new::<Vec<Cell>>(vec![
-                    Provision::active_string(mapping.status()).into(),
-                    mapping.partition.name().into(),
-                    if matches!(
-                        mapping.partition.name().as_str(),
-                        Bundle::BOOTLOADER_NAME | Bundle::PART_TABLE_NAME
-                    ) {
-                        "".into()
-                    } else {
-                        mapping.partition.ty().to_string().into()
-                    },
-                    if matches!(
-                        mapping.partition.name().as_str(),
-                        Bundle::BOOTLOADER_NAME | Bundle::PART_TABLE_NAME
-                    ) {
-                        "".into()
-                    } else {
-                        mapping.partition.subtype().to_string().into()
-                    },
-                    Text::raw(format!("0x{:06x}", mapping.partition.offset()))
+                let row = if let Some(partition) = mapping.partition.as_ref() {
+                    Row::new::<Vec<Cell>>(vec![
+                        Provision::active_string(mapping.status()).into(),
+                        partition.name().into(),
+                        if matches!(
+                            partition.name().as_str(),
+                            Bundle::BOOTLOADER_NAME | Bundle::PART_TABLE_NAME
+                        ) {
+                            "".into()
+                        } else {
+                            partition.ty().to_string().into()
+                        },
+                        if matches!(
+                            partition.name().as_str(),
+                            Bundle::BOOTLOADER_NAME | Bundle::PART_TABLE_NAME
+                        ) {
+                            "".into()
+                        } else {
+                            partition.subtype().to_string().into()
+                        },
+                        Text::raw(format!("0x{:06x}", partition.offset()))
+                            .right_aligned()
+                            .into(),
+                        Text::raw(format!(
+                            "{}KB (0x{:06x})",
+                            partition.size() / 1024
+                                + if partition.size() % 1024 > 0 { 1 } else { 0 },
+                            partition.size()
+                        ))
                         .right_aligned()
                         .into(),
-                    Text::raw(format!(
-                        "{}KB (0x{:06x})",
-                        mapping.partition.size() / 1024
-                            + if mapping.partition.size() % 1024 > 0 {
-                                1
-                            } else {
-                                0
-                            },
-                        mapping.partition.size()
-                    ))
-                    .right_aligned()
-                    .into(),
-                    "-".into(),
-                    Text::raw(
-                        mapping
-                            .image
-                            .as_ref()
-                            .map(|image| {
-                                format!(
-                                    "{}KB (0x{:06x})",
-                                    image.data.len() / 1024
-                                        + if image.data.len() % 1024 > 0 { 1 } else { 0 },
-                                    image.data.len()
-                                )
-                            })
-                            .unwrap_or("-".to_string()),
-                    )
-                    .right_aligned()
-                    .into(),
-                    Text::raw(Provision::status_string(mapping.status()))
+                        "-".into(),
+                        Text::raw(
+                            mapping
+                                .image
+                                .as_ref()
+                                .map(|image| {
+                                    format!(
+                                        "{}KB (0x{:06x})",
+                                        image.data.len() / 1024
+                                            + if image.data.len() % 1024 > 0 { 1 } else { 0 },
+                                        image.data.len()
+                                    )
+                                })
+                                .unwrap_or("-".to_string()),
+                        )
                         .right_aligned()
                         .into(),
-                ]);
+                        Text::raw(Provision::status_string(mapping.status()))
+                            .right_aligned()
+                            .into(),
+                    ])
+                } else {
+                    let image = mapping.image.as_ref().unwrap();
+
+                    Row::new::<Vec<Cell>>(vec![
+                        Provision::active_string(mapping.status()).into(),
+                        format!("???{}", image.name).into(),
+                        "".into(),
+                        "".into(),
+                        "".into(),
+                        "".into(),
+                        "".into(),
+                        Text::raw(format!(
+                            "{}KB (0x{:06x})",
+                            image.data.len() / 1024
+                                + if image.data.len() % 1024 > 0 { 1 } else { 0 },
+                            image.data.len()
+                        ))
+                        .right_aligned()
+                        .into(),
+                        Text::raw(Provision::status_string(mapping.status()))
+                            .right_aligned()
+                            .into(),
+                    ])
+                };
 
                 Provision::mark_available(row, mapping.status())
             }),

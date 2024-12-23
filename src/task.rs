@@ -559,7 +559,13 @@ where
         let mut bundle_file =
             File::open(bundle_path).context("Opening the loaded bundle file failed")?;
 
-        let bundle = Bundle::create(bundle_name, Params::default(), &mut bundle_file)?;
+        let bundle = Bundle::create(
+            bundle_name,
+            Params::default(),
+            &mut bundle_file,
+            self.conf.supply_default_partition_table,
+            self.conf.supply_default_bootloader,
+        )?;
 
         self.model.modify(move |state| {
             *state = State::Provision(Provision {

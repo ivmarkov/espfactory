@@ -1,5 +1,6 @@
 use core::iter::once;
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::io::{Read, Seek};
 
@@ -8,7 +9,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use anyhow::Context;
-use esp_idf_part::{Partition, SubType, Type};
+use esp_idf_part::{Partition, PartitionTable, SubType, Type};
 
 use espflash::flasher::FlashSize;
 use log::{info, warn};
@@ -24,7 +25,7 @@ extern crate alloc;
 /// Represents a loaded bundle ready for flashing and e-fuse programming
 #[derive(Clone, Debug)]
 pub struct Bundle {
-    /// The name of the bundle. Used for display purposes only
+    /// The name of the bundle.
     pub name: String,
     /// The parameters of the bundle (chip and an optional flash size)
     pub params: Params,
@@ -93,10 +94,14 @@ extra_1,  data, 0x06,            ,   20K,
     ///   well as for display purposes
     /// - `default_params`: The default parameters to use when the parameters are not provided in the bundle
     /// - `bundle_content`: The content of the bundle (a ZIP archive, a binary image, or an ELF image)
+    /// - `supply_default_part_table`: Whether to supply the default partition table if the partition table is not provided in the bundle
+    /// - `supply_default_bootloader`: Whether to supply the default bootloader if the bootloader is not provided in the bundle
     pub fn create<R>(
         name: String,
         default_params: Params,
         mut bundle_content: R,
+        supply_default_part_table: bool,
+        supply_default_bootloader: bool,
     ) -> anyhow::Result<Self>
     where
         R: Read + Seek,
@@ -110,21 +115,38 @@ extra_1,  data, 0x06,            ,   20K,
         match bundle_type {
             BundleType::Complete => {
                 info!("Bundle {name} is a ZIP file");
-                Self::from_zip_bundle(name, &mut ZipArchive::new(bundle_content)?)
+                Self::from_zip_bundle(
+                    name,
+                    &mut ZipArchive::new(bundle_content)?,
+                    supply_default_part_table,
+                    supply_default_bootloader,
+                )
             }
             BundleType::BinAppImage => {
                 info!("Bundle {name} is a binary App image");
                 let mut bytes = Vec::new();
                 bundle_content.read_to_end(&mut bytes)?;
 
-                Self::from_bin_app_image(name, default_params, &bytes)
+                Self::from_bin_app_image(
+                    name,
+                    default_params,
+                    &bytes,
+                    supply_default_part_table,
+                    supply_default_bootloader,
+                )
             }
             BundleType::ElfAppImage => {
                 info!("Bundle {name} is an ELF App image");
                 let mut bytes = Vec::new();
                 bundle_content.read_to_end(&mut bytes)?;
 
-                Self::from_elf_app_image(name, default_params, &bytes)
+                Self::from_elf_app_image(
+                    name,
+                    default_params,
+                    &bytes,
+                    supply_default_part_table,
+                    supply_default_bootloader,
+                )
             }
         }
     }
@@ -135,21 +157,26 @@ extra_1,  data, 0x06,            ,   20K,
     /// - `name`: The name of the bundle
     /// - `params`: The parameters of the bundle (chip and an optional flash size)
     /// - `app_image`: The content of the ELF application image
+    /// - `supply_default_part_table`: Whether to supply the default partition table
+    /// - `supply_default_bootloader`: Whether to supply the default bootloader
     pub fn from_elf_app_image(
         name: String,
         params: Params,
         app_image: &[u8],
+        supply_default_part_table: bool,
+        supply_default_bootloader: bool,
     ) -> anyhow::Result<Self> {
         info!("About to prep the ELF App image bundle {name}");
 
-        let app_image = Image::new_elf(flash::elf2bin(app_image, params.chip)?);
+        let app_image =
+            Image::new_elf("ota_1".to_string(), flash::elf2bin(app_image, params.chip)?);
 
         Self::from_parts(
             name,
             params,
-            None,
-            None,
-            once(("ota_1".to_string(), app_image)),
+            Payload::new(None, supply_default_part_table),
+            Payload::new(None, supply_default_bootloader),
+            once(app_image),
             Vec::new().into_iter(),
         )
     }
@@ -160,21 +187,25 @@ extra_1,  data, 0x06,            ,   20K,
     /// - `name`: The name of the bundle
     /// - `params`: The parameters of the bundle (chip and an optional flash size)
     /// - `app_image`: The content of the binary application image
+    /// - `supply_default_part_table`: Whether to supply the default partition table
+    /// - `supply_default_bootloader`: Whether to supply the default bootloader
     pub fn from_bin_app_image(
         name: String,
         params: Params,
         app_image: &[u8],
+        supply_default_part_table: bool,
+        supply_default_bootloader: bool,
     ) -> anyhow::Result<Self> {
         info!("About to prep the binary App image bundle {name}");
 
-        let app_image = Image::new(app_image.to_vec());
+        let app_image = Image::new("ota_1".to_string(), app_image.to_vec());
 
         Self::from_parts(
             name,
             params,
-            None,
-            None,
-            once(("ota_1".to_string(), app_image)),
+            Payload::new(None, supply_default_part_table),
+            Payload::new(None, supply_default_bootloader),
+            once(app_image),
             Vec::new().into_iter(),
         )
     }
@@ -184,7 +215,14 @@ extra_1,  data, 0x06,            ,   20K,
     /// # Arguments
     /// - `name`: The name of the bundle
     /// - `zip`: The ZIP archive containing the bundle content
-    pub fn from_zip_bundle<T>(name: String, zip: &mut ZipArchive<T>) -> anyhow::Result<Self>
+    /// - `supply_default_part_table`: Whether to supply the default partition table if the partition table is not provided in the bundle
+    /// - `supply_default_bootloader`: Whether to supply the default bootloader if the bootloader is not provided in the bundle
+    pub fn from_zip_bundle<T>(
+        name: String,
+        zip: &mut ZipArchive<T>,
+        supply_default_part_table: bool,
+        supply_default_bootloader: bool,
+    ) -> anyhow::Result<Self>
     where
         T: Read + Seek,
     {
@@ -245,7 +283,7 @@ extra_1,  data, 0x06,            ,   20K,
                     )
                 })?;
 
-                Ok::<_, anyhow::Error>(Image::new(data))
+                Ok::<_, anyhow::Error>(Image::new(Self::BOOTLOADER_NAME.to_string(), data))
             })
             .transpose()?;
 
@@ -275,12 +313,12 @@ extra_1,  data, 0x06,            ,   20K,
                 let elf = !file_name.ends_with(Self::BIN_SUFFIX);
 
                 let image = if elf {
-                    Image::new(flash::elf2bin(&data, params.chip)?)
+                    Image::new(name.to_string(), flash::elf2bin(&data, params.chip)?)
                 } else {
-                    Image::new(data)
+                    Image::new(name.to_string(), data)
                 };
 
-                Ok((name.to_string(), image))
+                Ok(image)
             })
             .collect();
 
@@ -319,8 +357,8 @@ extra_1,  data, 0x06,            ,   20K,
         Self::from_parts(
             name,
             params,
-            part_table_str.as_deref(),
-            bootloader_image,
+            Payload::new(part_table_str.as_deref(), supply_default_part_table),
+            Payload::new(bootloader_image, supply_default_bootloader),
             images.into_iter(),
             efuses.into_iter(),
         )
@@ -331,102 +369,228 @@ extra_1,  data, 0x06,            ,   20K,
     /// # Arguments
     /// - `name`: The name of the bundle
     /// - `params`: The parameters of the bundle (chip and an optional flash size)
-    /// - `part_table_str`: The partition table as a string; if `None`, the default partition table is used
-    /// - `bootloader`: The bootloader image; if `None`, a default bootloader is used
+    /// - `part_table_str`: The partition table as a string
+    /// - `bootloader`: The bootloader image
     /// - `images`: The images to be flashed to the partitions, where the key is the partition name
     /// - `efuses`: The efuses to be programmed, where the key is the efuse name (TBD)
     pub fn from_parts(
         name: String,
         params: Params,
-        part_table_str: Option<&str>,
-        bootloader: Option<Image>,
-        images: impl Iterator<Item = (String, Image)>,
+        part_table_str: Payload<&str>,
+        bootloader: Payload<Image>,
+        images: impl Iterator<Item = Image>,
         efuses: impl Iterator<Item = Efuse>,
     ) -> anyhow::Result<Self> {
+        /// Helper struct to hold the partition table data
+        struct PartTableData {
+            /// The parsed partition table
+            table: PartitionTable,
+            /// The offset of the partition table
+            offset: u32,
+            /// The image of the partition table
+            image: Image,
+        }
+
+        impl PartTableData {
+            /// Create a new `PartTableData` from the partition table string
+            fn new(part_table_str: Payload<&str>) -> anyhow::Result<Option<Self>> {
+                let part_table_str =
+                    part_table_str.into_option(|| Ok(Bundle::DEFAULT_PART_TABLE))?;
+
+                if let Some(part_table_str) = part_table_str {
+                    let table = esp_idf_part::PartitionTable::try_from_str(part_table_str)
+                        .context("Parsing CSV partition table failed")?;
+
+                    let offset = table.partitions()[0].offset() - Bundle::PART_TABLE_SIZE as u32;
+
+                    let image = Image::new(
+                        Bundle::PART_TABLE_NAME.to_string(),
+                        table
+                            .to_bin()
+                            .context("Converting CSV partition table to binary failed")?,
+                    );
+
+                    Ok(Some(PartTableData {
+                        table,
+                        offset,
+                        image,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+
         info!("Prepping bundle {name} from parts");
 
-        let images = images.collect::<HashMap<_, _>>();
+        let pt = PartTableData::new(part_table_str)?;
 
-        let part_table_str = part_table_str.unwrap_or(Self::DEFAULT_PART_TABLE);
-        let bootloader = Ok(bootloader).transpose().unwrap_or_else(|| {
-            flash::default_bootloader(params.chip, params.flash_size).map(Image::new)
-        })?;
+        let mut images = images
+            .into_iter()
+            .map(|image| (image.name.clone(), image))
+            .collect::<HashMap<_, _>>();
 
-        let part_table = esp_idf_part::PartitionTable::try_from_str(part_table_str)
-            .context("Parsing CSV partition table failed")?;
-        let part_table_image = Image::new(
-            part_table
-                .to_bin()
-                .context("Converting CSV partition table to binary failed")?,
-        );
+        let mut parts_mapping = Vec::new();
 
-        let part_table_offset = part_table.partitions()[0].offset() - Self::PART_TABLE_SIZE as u32;
+        if let Some(image) = bootloader.into_option(|| {
+            flash::default_bootloader(params.chip, params.flash_size)
+                .map(|bl| Image::new(Self::BOOTLOADER_NAME.to_string(), bl))
+        })? {
+            parts_mapping.push(PartitionMapping {
+                partition: pt.as_ref().map(|pt| {
+                    Partition::new(
+                        Self::BOOTLOADER_NAME,
+                        Type::Custom(0),
+                        SubType::Custom(0),
+                        params.chip.boot_addr(),
+                        pt.offset - params.chip.boot_addr(),
+                        false,
+                    )
+                }),
+                image: Some(image),
+            });
+        }
 
-        let bootloader_offset = params.chip.boot_addr();
-        let bootloader_size = part_table_offset - bootloader_offset;
+        if let Some(pt) = pt.as_ref() {
+            parts_mapping.push(PartitionMapping {
+                partition: Some(Partition::new(
+                    Self::PART_TABLE_NAME,
+                    Type::Custom(0),
+                    SubType::Custom(0),
+                    pt.offset,
+                    Self::PART_TABLE_SIZE as u32,
+                    false,
+                )),
+                image: Some(pt.image.clone()),
+            });
 
-        let parts_mapping: anyhow::Result<Vec<PartitionMapping>> = once(Ok(PartitionMapping {
-            partition: Partition::new(
-                Self::BOOTLOADER_NAME,
-                Type::Custom(0),
-                SubType::Custom(0),
-                bootloader_offset,
-                bootloader_size,
-                false,
-            ),
-            image: Some(bootloader),
-        }))
-        .chain(once(Ok(PartitionMapping {
-            partition: Partition::new(
-                Self::PART_TABLE_NAME,
-                Type::Custom(0),
-                SubType::Custom(0),
-                part_table_offset,
-                Self::PART_TABLE_SIZE as _,
-                false,
-            ),
-            image: Some(part_table_image),
-        })))
-        .chain(
-            part_table
-                .partitions()
-                .iter()
-                .map(|partition| {
-                    let image = images.get(partition.name().as_str());
-                    if let Some(image) = image {
-                        if image.elf {
-                            if matches!(partition.ty(), Type::App) {
-                                warn!("ELF image found for partition '{}', prefer `.bin` files, as they take less space", partition.name());
-                            } else {
-                                anyhow::bail!("Partition '{}' is not of type 'App', but an ELF image was provided", partition.name());
-                            }
+            for partition in pt.table.partitions() {
+                let image = if let Entry::Occupied(entry) = images.entry(partition.name()) {
+                    let image = entry.remove();
+
+                    if image.elf {
+                        if matches!(partition.ty(), Type::App) {
+                            warn!("ELF image found for partition '{}', prefer `.bin` files, as they take less space", partition.name());
+                        } else {
+                            anyhow::bail!("Partition '{}' is not of type 'App', but an ELF image was provided", partition.name());
                         }
                     }
 
-                    Ok(PartitionMapping {
-                        partition: partition.clone(),
-                        image: image.cloned(),
-                    })
-                }),
-        )
-        .collect();
+                    Some(image)
+                } else {
+                    None
+                };
+
+                parts_mapping.push(PartitionMapping {
+                    partition: Some(partition.clone()),
+                    image,
+                });
+            }
+        }
+
+        for image in images.into_values() {
+            parts_mapping.push(PartitionMapping {
+                partition: None,
+                image: Some(image),
+            });
+        }
 
         info!("Bundle {name} prepared");
 
         Ok(Self {
             name,
             params,
-            parts_mapping: parts_mapping?,
+            parts_mapping,
             efuse_mapping: efuses.collect(),
+        })
+    }
+
+    /// Add the images and efuses of another bundle into the current bundle
+    ///
+    /// # Arguments
+    /// - `other`: The other bundle to merge into the current bundle
+    /// - `ovewrite`: Whether to overwrite the images and efuses of the current bundle
+    ///   with the images and efuses of the other bundle
+    pub fn add(&mut self, other: Self, ovewrite: bool) -> anyhow::Result<()> {
+        if self.params != other.params {
+            anyhow::bail!("Cannot merge bundles with different parameters");
+        }
+
+        let mut other_images = other
+            .parts_mapping
+            .into_iter()
+            .filter_map(|mapping| mapping.image)
+            .map(|image| (image.name.clone(), image))
+            .collect::<HashMap<_, _>>();
+
+        for mapping in &mut self.parts_mapping {
+            let name = mapping
+                .partition
+                .as_ref()
+                .map(|partition| partition.name().to_string())
+                .unwrap_or(mapping.image.as_ref().unwrap().name.clone());
+
+            if let Entry::Occupied(entry) = other_images.entry(name.clone()) {
+                if mapping.image.is_none() || ovewrite {
+                    mapping.image = Some(entry.remove());
+                } else {
+                    anyhow::bail!("Image for mapping '{}' already exists", name);
+                }
+            }
+        }
+
+        for image in other_images.into_values() {
+            self.parts_mapping.push(PartitionMapping {
+                partition: None,
+                image: Some(image),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Return `true` if the bundle is bootable, i.e. has a partition table, a bootloader, and an app image
+    pub fn is_bootable(&self) -> bool {
+        self.has_part_table() && self.has_bootloader() && self.has_app_image()
+    }
+
+    /// Return `true` if the bundle has a partition table
+    pub fn has_part_table(&self) -> bool {
+        self.parts_mapping
+            .iter()
+            .any(|mapping| mapping.partition.is_some())
+    }
+
+    /// Return `true` if the bundle has a bootloader
+    pub fn has_bootloader(&self) -> bool {
+        self.parts_mapping.iter().any(|mapping| {
+            mapping
+                .partition
+                .as_ref()
+                .map(|partition| partition.name().as_str() == Self::BOOTLOADER_NAME)
+                .unwrap_or(false)
+        })
+    }
+
+    /// Return `true` if the bundle has at least one app image
+    pub fn has_app_image(&self) -> bool {
+        self.parts_mapping.iter().any(|mapping| {
+            mapping
+                .partition
+                .as_ref()
+                .map(|partition| matches!(partition.ty(), Type::App) && mapping.image.is_some())
+                .unwrap_or(false)
         })
     }
 
     /// Get the flash data to be flashed to the device
     pub(crate) fn get_flash_data(&self) -> impl Iterator<Item = FlashData> + '_ {
         self.parts_mapping.iter().filter_map(|mapping| {
-            mapping.image.as_ref().map(|image| FlashData {
-                offset: mapping.partition.offset(),
-                data: image.data.clone(),
+            mapping.partition.as_ref().and_then(|partition| {
+                mapping.image.as_ref().map(|image| FlashData {
+                    offset: partition.offset(),
+                    data: image.data.clone(),
+                })
             })
         })
     }
@@ -452,11 +616,13 @@ extra_1,  data, 0x06,            ,   20K,
         let mut modified = false;
 
         for mapping in &mut self.parts_mapping {
-            if mapping.partition.offset() == part_offset {
-                if let Some(image) = mapping.image.as_mut() {
-                    if image.status != status {
-                        image.status = status;
-                        modified = true;
+            if let Some(partition) = mapping.partition.as_ref() {
+                if partition.offset() == part_offset {
+                    if let Some(image) = mapping.image.as_mut() {
+                        if image.status != status {
+                            image.status = status;
+                            modified = true;
+                        }
                     }
                 }
             }
@@ -466,8 +632,51 @@ extra_1,  data, 0x06,            ,   20K,
     }
 }
 
+/// A type for a payload that can be either provided, not providced,
+/// or requested to be the default payload for that payload type
+///
+/// This is used for the partition table and bootloader images,
+/// where the default partition table and bootloader are used if requested with `Default`
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub enum Payload<T> {
+    /// No payload provided
+    None,
+    /// Request default payload
+    Default,
+    /// Provided payload
+    Provided(T),
+}
+
+impl<T> Payload<T> {
+    /// Create a new `Payload` with the given data and whether to supply the default payload if the data is `None`
+    pub fn new(data: Option<T>, supply_default: bool) -> Self {
+        match data {
+            Some(data) => Self::Provided(data),
+            None => {
+                if supply_default {
+                    Self::Default
+                } else {
+                    Self::None
+                }
+            }
+        }
+    }
+
+    /// Get the data from the payload supplying the default if requested
+    fn into_option<F>(self, f: F) -> anyhow::Result<Option<T>>
+    where
+        F: FnOnce() -> anyhow::Result<T>,
+    {
+        match self {
+            Self::None => Ok(None),
+            Self::Default => f().map(Some),
+            Self::Provided(data) => Ok(Some(data)),
+        }
+    }
+}
+
 /// The parameters of the bundle
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Params {
     /// Chip type to be flashed
     pub chip: Chip,
@@ -555,7 +764,7 @@ pub struct FlashData {
 #[derive(Clone, Debug)]
 pub struct PartitionMapping {
     /// The partition
-    pub partition: Partition,
+    pub partition: Option<Partition>,
     /// The image to be flashed to the partition; if `None`, the partition will be left empty
     pub image: Option<Image>,
 }
@@ -578,6 +787,8 @@ pub struct Efuse {
 /// An image to be flashed to some partition
 #[derive(Debug, Clone)]
 pub struct Image {
+    /// The name of the image
+    pub name: String,
     /// The data of the image
     pub data: Arc<Vec<u8>>,
     /// Was the image originally provided as an ELF file
@@ -591,8 +802,9 @@ pub struct Image {
 impl Image {
     /// Create a new `Image` from the given binary data, where the binary data
     /// was not extracted from an ELF file
-    pub fn new(data: Vec<u8>) -> Self {
+    pub fn new(name: String, data: Vec<u8>) -> Self {
         Self {
+            name,
             data: Arc::new(data),
             elf: false,
             status: ProvisioningStatus::NotStarted,
@@ -601,8 +813,9 @@ impl Image {
 
     /// Create a new `Image` from the given binary data, where the binary data
     /// was extracted from an ELF file
-    pub fn new_elf(data: Vec<u8>) -> Self {
+    pub fn new_elf(name: String, data: Vec<u8>) -> Self {
         Self {
+            name,
             data: Arc::new(data),
             elf: true,
             status: ProvisioningStatus::NotStarted,

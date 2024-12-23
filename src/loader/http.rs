@@ -4,7 +4,6 @@ use anyhow::Context;
 
 use log::info;
 
-use reqwest::blocking::Body;
 
 use super::BundleLoader;
 

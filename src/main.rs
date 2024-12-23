@@ -5,11 +5,11 @@ use async_compat::CompatExt;
 use clap::{ColorChoice, Parser, Subcommand, ValueEnum};
 
 use espfactory::loader::{dir::DirLoader, http::HttpLoader, BundleLoader};
-use espfactory::{BundleIdentification, LOGGER};
+use espfactory::{BundleIdentification, Config, LOGGER};
 
 use log::LevelFilter;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 extern crate alloc;
 
@@ -30,7 +30,7 @@ struct Cli {
 }
 
 /// Command
-#[derive(Subcommand, Debug, Clone, Eq, PartialEq, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum BundleSource {
     /// Load bundles from a directory
     Dir {
@@ -85,85 +85,26 @@ impl Verbosity {
 }
 
 /// The configuration of the factory
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 //#[cfg_attr(feature = "bin", )]
-pub struct Config {
-    /// Whether to run in dry-run mode
-    pub dry_run: bool,
-    /// The serial port to use for communication with the device
-    ///
-    /// If not provided, the first available port where an ESP chip is
-    /// detected will be used
-    pub port: Option<String>,
-    /// The flash speed to use for flashing the device
-    ///
-    /// If not provided, the default speed will be used
-    pub flash_speed: Option<u32>,
+pub struct Settings {
     /// The source of bundles
     pub bundle_source: Option<BundleSource>,
-    /// The method used to identify the bundle to be loaded
-    ///
-    /// If not provided, the first bundle found will be loaded
-    pub bundle_identification: Option<BundleIdentification>,
-    /// Whether to render a UI for reading the test jig ID
-    ///
-    /// The test jig Id is only read and used for logging purposes
-    ///
-    /// If not provided, `false` is assumed
-    pub test_jig_id_readout: Option<bool>,
-    /// Whether to render a UI for reading the PCB ID
-    ///
-    /// The PCB ID is used for logging purposes, but also and if the `BundleIdentification::PcbId` is used
-    /// it is used to identify the bundle to be loaded
-    ///
-    /// If not provided, `false` is assumed
-    pub pcb_id_readout: Option<bool>,
-    /// Whether to render a UI for reading the box ID
-    ///
-    /// The box ID is used for logging purposes, but also and if the `BundleIdentification::BoxId` is used
-    /// it is used to identify the bundle to be loaded
-    ///
-    /// If not provided, `false` is assumed
-    pub box_id_readout: Option<bool>,
-    /// Whether to skip confirmations
-    ///
-    /// If not provided, `false` is assumed
-    pub skip_confirmations: Option<bool>,
+    pub config: Config,
 }
 
-impl Config {
+impl Settings {
     /// Create a new configuration with default values
     /// (no port, no bundle identification method, no readouts)
     pub const fn new() -> Self {
         Self {
-            dry_run: true,
-            port: None,
-            flash_speed: None,
             bundle_source: None,
-            bundle_identification: None,
-            test_jig_id_readout: None,
-            pcb_id_readout: None,
-            box_id_readout: None,
-            skip_confirmations: None,
-        }
-    }
-
-    /// Convert the configuration to the library configuration format
-    pub fn to_lib_config(&self) -> espfactory::Config {
-        espfactory::Config {
-            dry_run: self.dry_run,
-            port: self.port.as_ref().cloned(),
-            flash_speed: self.flash_speed,
-            bundle_identification: self.bundle_identification.unwrap_or_default(),
-            test_jig_id_readout: self.test_jig_id_readout.unwrap_or_default(),
-            pcb_id_readout: self.pcb_id_readout.unwrap_or_default(),
-            box_id_readout: self.box_id_readout.unwrap_or_default(),
-            skip_confirmations: self.skip_confirmations.unwrap_or_default(),
+            config: Config::new(),
         }
     }
 }
 
-impl Default for Config {
+impl Default for Settings {
     fn default() -> Self {
         Self::new()
     }
@@ -217,16 +158,16 @@ fn main() -> anyhow::Result<()> {
     let conf = if let Some(conf) = args.conf {
         toml::from_str(&std::fs::read_to_string(conf)?)?
     } else {
-        Config {
-            dry_run: true,
-            port: None,
-            flash_speed: None,
+        Settings {
             bundle_source: None,
-            bundle_identification: Some(BundleIdentification::BoxId),
-            test_jig_id_readout: Some(true),
-            pcb_id_readout: Some(true),
-            box_id_readout: Some(true),
-            skip_confirmations: Some(false),
+            config: Config {
+                dry_run: true,
+                bundle_identification: BundleIdentification::BoxId,
+                test_jig_id_readout: true,
+                pcb_id_readout: true,
+                box_id_readout: true,
+                ..Default::default()
+            },
         }
     };
 
@@ -267,9 +208,7 @@ fn main() -> anyhow::Result<()> {
 
         std::env::set_var("RUST_LIB_BACKTRACE", "1");
 
-        futures_lite::future::block_on(
-            espfactory::run(&conf.to_lib_config(), bundle_dir, loader).compat(),
-        )?;
+        futures_lite::future::block_on(espfactory::run(&conf.config, bundle_dir, loader).compat())?;
     }
 
     Ok(())
