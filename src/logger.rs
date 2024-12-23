@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io::Write;
 use std::sync::Mutex;
 
@@ -11,7 +12,7 @@ use log::{Level, LevelFilter, Log, Metadata, Record};
 
 extern crate alloc;
 
-pub type LogFile = tempfile::NamedTempFile;
+pub type LogFile = File;
 
 /// The global logger used by the factory
 pub static LOGGER: Logger<LogFile, Arc<Signal<CriticalSectionRawMutex, ()>>> =
@@ -218,16 +219,16 @@ pub struct LogLine {
 }
 
 pub mod file {
-    use std::io::{Read, Write};
+    use std::io::{Read, Seek, SeekFrom, Write};
 
-    use tempfile::NamedTempFile;
+    use tempfile::tempfile;
 
     use zip::{write::FileOptions, ZipWriter};
 
     use super::LogFile;
 
     pub fn start() -> anyhow::Result<LogFile> {
-        let log = NamedTempFile::new()?;
+        let log = tempfile()?;
 
         Ok(log)
     }
@@ -237,14 +238,14 @@ pub mod file {
         I: IntoIterator<Item = (&'i S, &'i S)>,
         S: AsRef<str> + 'i,
     {
-        log.flush()?;
-
-        let mut log_zip_file = NamedTempFile::new()?;
+        let mut log_zip_file = tempfile()?;
 
         let mut log_zip = ZipWriter::new(&mut log_zip_file);
         log_zip.start_file("log.txt", FileOptions::<()>::default())?;
 
-        log.reopen()?;
+        log.flush()?;
+        log.seek(SeekFrom::Start(0))?;
+        
         std::io::copy(&mut log, &mut log_zip)?;
 
         log_zip.start_file("log.csv", FileOptions::<()>::default())?;
@@ -263,7 +264,8 @@ pub mod file {
 
         drop(log_zip);
 
-        log_zip_file.reopen()?;
+        log_zip_file.flush()?;
+        log_zip_file.seek(SeekFrom::Start(0))?;
 
         Ok(log_zip_file)
     }

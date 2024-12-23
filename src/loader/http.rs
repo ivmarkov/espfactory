@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 
 use anyhow::Context;
 
@@ -99,5 +99,18 @@ impl BundleLoader for HttpLoader {
         info!("Loaded bundle `{}`", bundle_name);
 
         Ok(bundle_name)
+    }
+
+    async fn upload_logs<R>(
+        &mut self,
+        _read: R,
+        _id: Option<&str>,
+        _name: &str,
+    ) -> anyhow::Result<()>
+    where
+        R: Read,
+    {
+        // Do nothing by default
+        Ok(())
     }
 }

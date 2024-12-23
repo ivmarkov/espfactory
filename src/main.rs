@@ -52,7 +52,9 @@ pub enum BundleSource {
         #[arg(short = 'd', long)]
         delete_after_load: bool,
 
-        path: String,
+        load_path: String,
+
+        logs_upload_path: Option<String>,
     },
 }
 
@@ -188,6 +190,23 @@ impl BundleLoader for Loader {
             Self::S3(loader) => loader.load(write, id).await,
         }
     }
+
+    async fn upload_logs<R>(
+        &mut self,
+        read: R,
+        id: Option<&str>,
+        name: &str,
+    ) -> anyhow::Result<()>
+    where
+        R: std::io::Read,
+    {
+        match self {
+            Self::Dir(loader) => loader.upload_logs(read, id, name).await,
+            Self::Http(loader) => loader.upload_logs(read, id, name).await,
+            #[cfg(feature = "s3")]
+            Self::S3(loader) => loader.upload_logs(read, id, name).await,
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -225,12 +244,14 @@ fn main() -> anyhow::Result<()> {
             }
             #[cfg(feature = "s3")]
             BundleSource::S3 {
-                path,
+                load_path,
                 delete_after_load,
+                logs_upload_path,
             } => Loader::S3(espfactory::loader::s3::S3Loader::new_from_path(
                 None,
-                path,
+                load_path,
                 delete_after_load,
+                logs_upload_path,
             )),
         });
 

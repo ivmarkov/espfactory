@@ -1,12 +1,14 @@
 use core::fmt::{self, Display};
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use anyhow::Context;
-use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::get_object::GetObjectError;
+use aws_sdk_s3::{error::SdkError, primitives::ByteStream};
 
 use log::info;
+
+use tempfile::tempfile;
 
 use super::{BundleLoader, BundleType};
 
@@ -31,31 +33,54 @@ pub mod aws_config {
 #[derive(Debug, Clone)]
 pub struct S3Loader {
     config: Option<aws_config::SdkConfig>,
-    bucket: String,
-    prefix: Option<String>,
+    load_bucket: String,
+    load_prefix: Option<String>,
     delete_after_load: bool,
+    logs_upload_bucket: Option<String>,
+    logs_upload_prefix: Option<String>,
 }
 
 impl S3Loader {
     pub fn new_from_path(
         config: Option<aws_config::SdkConfig>,
-        path: String,
+        load_path: String,
         delete_after_load: bool,
+        logs_upload_path: Option<String>,
     ) -> Self {
-        let path = path.trim_matches('/');
-        let (bucket, prefix) = if let Some(split) = path.find('/') {
-            let (bucket, prefix) = path.split_at(split);
+        let load_path = load_path.trim_matches('/');
+        let (load_bucket, load_prefix) = if let Some(split) = load_path.find('/') {
+            let (load_bucket, load_prefix) = load_path.split_at(split);
 
-            (bucket, Some(prefix))
+            (load_bucket, Some(load_prefix[1..].to_string()))
         } else {
-            (path, None)
+            (load_path, None)
         };
+
+        let (logs_upload_bucket, logs_upload_prefix) =
+            if let Some(logs_upload_path) = logs_upload_path {
+                let logs_upload_path = logs_upload_path.trim_matches('/');
+
+                if let Some(split) = logs_upload_path.find('/') {
+                    let (logs_upload_bucket, logs_upload_prefix) = logs_upload_path.split_at(split);
+
+                    (
+                        Some(logs_upload_bucket.to_string()),
+                        Some(logs_upload_prefix[1..].to_string()),
+                    )
+                } else {
+                    (Some(logs_upload_path.to_string()), None)
+                }
+            } else {
+                (None, None)
+            };
 
         Self::new(
             config,
-            bucket.to_string(),
-            prefix.map(|p| p.to_string()),
+            load_bucket.to_string(),
+            load_prefix.map(|p| p.to_string()),
             delete_after_load,
+            logs_upload_bucket,
+            logs_upload_prefix,
         )
     }
 
@@ -68,15 +93,19 @@ impl S3Loader {
     ///   Used only when loading a random bundle (i.e., the `id` argument when calling `load` is not provided)
     pub const fn new(
         config: Option<aws_config::SdkConfig>,
-        bucket: String,
-        prefix: Option<String>,
+        load_bucket: String,
+        load_prefix: Option<String>,
         delete_after_load: bool,
+        logs_upload_bucket: Option<String>,
+        logs_upload_prefix: Option<String>,
     ) -> Self {
         Self {
             config,
-            bucket,
-            prefix,
+            load_bucket,
+            load_prefix,
             delete_after_load,
+            logs_upload_bucket,
+            logs_upload_prefix,
         }
     }
 }
@@ -89,12 +118,12 @@ impl BundleLoader for S3Loader {
         if let Some(id) = id {
             info!(
                 "About to fetch a bundle with ID `{id}` from S3 bucket `{}`...",
-                BucketWithPrefix::new(&self.bucket, self.prefix.as_deref())
+                BucketWithPrefix::new(&self.load_bucket, self.load_prefix.as_deref())
             );
         } else {
             info!(
                 "About to fetch a random bundle from S3 bucket `{}`...",
-                BucketWithPrefix::new(&self.bucket, self.prefix.as_deref())
+                BucketWithPrefix::new(&self.load_bucket, self.load_prefix.as_deref())
             );
         }
 
@@ -110,14 +139,14 @@ impl BundleLoader for S3Loader {
             for bundle_type in BundleType::iter() {
                 let bundle_name = bundle_type.file(id);
                 let key = self
-                    .prefix
+                    .load_prefix
                     .as_deref()
                     .map(|prefix| format!("{}/{}", prefix, bundle_name))
                     .unwrap_or(bundle_name.clone());
 
                 let result = client
                     .get_object()
-                    .bucket(&self.bucket)
+                    .bucket(&self.load_bucket)
                     .key(&key)
                     .send()
                     .await;
@@ -146,13 +175,13 @@ impl BundleLoader for S3Loader {
             let mut continuation_token = None;
 
             loop {
-                let mut builder = client.list_objects_v2().bucket(&self.bucket);
+                let mut builder = client.list_objects_v2().bucket(&self.load_bucket);
 
                 if let Some(continuation_token) = continuation_token {
                     builder = builder.continuation_token(continuation_token);
                 }
 
-                if let Some(prefix) = &self.prefix {
+                if let Some(prefix) = &self.load_prefix {
                     builder = builder.prefix(prefix);
                 }
 
@@ -164,7 +193,7 @@ impl BundleLoader for S3Loader {
                         {
                             let mut object_data = client
                                 .get_object()
-                                .bucket(&self.bucket)
+                                .bucket(&self.load_bucket)
                                 .key(key)
                                 .send()
                                 .await
@@ -181,7 +210,7 @@ impl BundleLoader for S3Loader {
                             if id.is_none() && self.delete_after_load {
                                 client
                                     .delete_object()
-                                    .bucket(&self.bucket)
+                                    .bucket(&self.load_bucket)
                                     .key(key)
                                     .send()
                                     .await
@@ -209,6 +238,65 @@ impl BundleLoader for S3Loader {
             anyhow::bail!("No bundles found in the bucket")
         }
     }
+
+    async fn upload_logs<R>(
+        &mut self,
+        mut read: R,
+        id: Option<&str>,
+        name: &str,
+    ) -> anyhow::Result<()>
+    where
+        R: Read,
+    {
+        let Some(logs_upload_bucket) = self.logs_upload_bucket.as_deref() else {
+            return Ok(());
+        };
+
+        if let Some(id) = id {
+            info!(
+                "About to upload logs `{name}` for ID `{id}` to S3 bucket `{}`...",
+                BucketWithPrefix::new(logs_upload_bucket, self.logs_upload_prefix.as_deref())
+            );
+        } else {
+            info!(
+                "About to uploads logs `{name}` to S3 bucket `{}`...",
+                BucketWithPrefix::new(logs_upload_bucket, self.logs_upload_prefix.as_deref())
+            );
+        }
+
+        let config = if let Some(config) = self.config.as_ref() {
+            config.clone()
+        } else {
+            aws_config::load_from_env().await
+        };
+
+        let client = aws_sdk_s3::Client::new(&config);
+
+        let key = self
+            .logs_upload_prefix
+            .as_deref()
+            .map(|prefix| format!("{prefix}/{name}.log.zip"))
+            .unwrap_or(format!("{name}.log.zip"));
+
+        let mut temp_file = tempfile()?;
+        std::io::copy(&mut read, &mut temp_file)?;
+
+        temp_file.flush()?;
+        temp_file.seek(SeekFrom::Start(0))?;
+
+        client
+            .put_object()
+            .bucket(logs_upload_bucket)
+            .key(key)
+            .body(ByteStream::read_from().file(temp_file.into()).build().await?)
+            .send()
+            .await
+            .context("Uploading bundle logs failed")?;
+
+        info!("Logs `{name}` uploaded");
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -226,7 +314,7 @@ impl<'a> BucketWithPrefix<'a> {
 impl Display for BucketWithPrefix<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(prefix) = self.prefix {
-            write!(f, "{}{}", self.bucket, prefix)
+            write!(f, "{}/{}", self.bucket, prefix)
         } else {
             write!(f, "{}", self.bucket)
         }

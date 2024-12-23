@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -115,5 +115,18 @@ impl BundleLoader for DirLoader {
         } else {
             anyhow::bail!("No files found in bundles' directory")
         }
+    }
+
+    async fn upload_logs<R>(
+        &mut self,
+        _read: R,
+        _id: Option<&str>,
+        _name: &str,
+    ) -> anyhow::Result<()>
+    where
+        R: Read,
+    {
+        // Do nothing by default
+        Ok(())
     }
 }
