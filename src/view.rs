@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Widget};
 use ratatui::DefaultTerminal;
 
-use crate::bundle::{Bundle, ProvisioningStatus};
+use crate::bundle::{Bundle, Efuse, ProvisioningStatus};
 use crate::logger::LOGGER;
 use crate::model::{Model, Processing, Provision, Readout, State, Status};
 
@@ -315,7 +315,64 @@ impl Widget for &Provision {
         )
         .render(layout[1], buf);
 
-        Paragraph::new("== EFUSE").bold().render(layout[3], buf);
+        if !self.bundle.efuse_mapping.is_empty() {
+            Paragraph::new("== EFUSE").bold().render(layout[3], buf);
+
+            Table::new(
+                self.bundle.efuse_mapping.iter().map(|mapping| {
+                    let row = Row::new::<Vec<Cell>>(vec![
+                        Provision::active_string(Some(mapping.status)).into(),
+                        mapping.efuse.name().into(),
+                        match &mapping.efuse {
+                            Efuse::Param { .. } => "Param".into(),
+                            Efuse::Key { .. } => "Key".into(),
+                            Efuse::KeyDigest { .. } => "Digest".into(),
+                        },
+                        match &mapping.efuse {
+                            Efuse::Param { .. } => "-".into(),
+                            Efuse::Key { purpose, .. } | Efuse::KeyDigest { purpose, .. } => {
+                                purpose.clone().into()
+                            }
+                        },
+                        match &mapping.efuse {
+                            Efuse::Param { value, .. } => format!("0x{:08x}", value).into(),
+                            Efuse::Key {
+                                key_value: value, ..
+                            }
+                            | Efuse::KeyDigest {
+                                digest_value: value,
+                                ..
+                            } => format!("({}B)", value.len()).into(),
+                        },
+                        Text::raw(Provision::status_string(Some(mapping.status)))
+                            .right_aligned()
+                            .into(),
+                    ]);
+
+                    Provision::mark_available(row, Some(mapping.status))
+                }),
+                vec![
+                    Constraint::Length(1),
+                    Constraint::Percentage(40),
+                    Constraint::Length(7),
+                    Constraint::Percentage(30),
+                    Constraint::Percentage(30),
+                    Constraint::Length(11),
+                ],
+            )
+            .header(
+                Row::new::<Vec<Cell>>(vec![
+                    "".into(),
+                    "Name".into(),
+                    "Type".into(),
+                    "Purpose".into(),
+                    Text::raw("Value").right_aligned().into(),
+                    Text::raw("Provision").right_aligned().into(),
+                ])
+                .gray(),
+            )
+            .render(layout[1], buf);
+        }
     }
 }
 

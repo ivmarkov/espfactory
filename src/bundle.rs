@@ -1,3 +1,4 @@
+use core::fmt::{self, Display};
 use core::iter::once;
 
 use std::collections::hash_map::Entry;
@@ -32,7 +33,7 @@ pub struct Bundle {
     /// The mapping of partitions to images
     pub parts_mapping: Vec<PartitionMapping>,
     /// The mapping of efuses to efuse regions (TBD)
-    pub efuse_mapping: Vec<Efuse>,
+    pub efuse_mapping: Vec<EfuseMapping>,
 }
 
 impl Bundle {
@@ -342,13 +343,10 @@ extra_1,  data, 0x06,            ,   20K,
                     .read_to_end(&mut data)
                     .with_context(|| format!("Loading {} from the ZIP file failed", file_name))?;
 
-                Ok(Efuse {
-                    name: file_name
-                        .strip_prefix(Self::EFUSES_PREFIX)
-                        .unwrap()
-                        .to_string(),
-                    data: Arc::new(data),
-                })
+                Efuse::new(
+                    file_name.strip_prefix(Self::EFUSES_PREFIX).unwrap(),
+                    Arc::new(data),
+                )
             })
             .collect();
 
@@ -501,7 +499,12 @@ extra_1,  data, 0x06,            ,   20K,
             name,
             params,
             parts_mapping,
-            efuse_mapping: efuses.collect(),
+            efuse_mapping: efuses
+                .map(|efuse| EfuseMapping {
+                    efuse,
+                    status: ProvisioningStatus::NotStarted,
+                })
+                .collect(),
         })
     }
 
@@ -511,7 +514,7 @@ extra_1,  data, 0x06,            ,   20K,
     /// - `other`: The other bundle to merge into the current bundle
     /// - `ovewrite`: Whether to overwrite the images and efuses of the current bundle
     ///   with the images and efuses of the other bundle
-    pub fn add(&mut self, other: Self, ovewrite: bool) -> anyhow::Result<()> {
+    pub fn add(&mut self, other: Self, overwrite: bool) -> anyhow::Result<()> {
         if self.params != other.params {
             anyhow::bail!("Cannot merge bundles with different parameters");
         }
@@ -531,10 +534,22 @@ extra_1,  data, 0x06,            ,   20K,
                 .unwrap_or(mapping.image.as_ref().unwrap().name.clone());
 
             if let Entry::Occupied(entry) = other_images.entry(name.clone()) {
-                if mapping.image.is_none() || ovewrite {
+                if mapping.image.is_none() || overwrite {
                     mapping.image = Some(entry.remove());
                 } else {
                     anyhow::bail!("Image for mapping '{}' already exists", name);
+                }
+            }
+        }
+
+        let other_efuses = other.efuse_mapping;
+
+        if !overwrite {
+            for efuse in &other_efuses {
+                for existing_efuse in &self.efuse_mapping {
+                    if efuse.efuse.is_same(&existing_efuse.efuse) {
+                        anyhow::bail!("Efuse '{}' already exists", efuse.efuse);
+                    }
                 }
             }
         }
@@ -544,6 +559,18 @@ extra_1,  data, 0x06,            ,   20K,
                 partition: None,
                 image: Some(image),
             });
+        }
+
+        for efuse in other_efuses {
+            if let Some(existing_efuse) = self
+                .efuse_mapping
+                .iter_mut()
+                .find(|existing_efuse| efuse.efuse.is_same(&existing_efuse.efuse))
+            {
+                *existing_efuse = efuse;
+            } else {
+                self.efuse_mapping.push(efuse);
+            }
         }
 
         self.name = format!("{}+{}", self.name, other.name);
@@ -778,12 +805,161 @@ impl PartitionMapping {
     }
 }
 
-/// The mapping of an efuse to an efuse region
-/// TBD
+/// An efuse to be programmed
+#[derive(Debug, Clone)]
+pub enum Efuse {
+    /// A parameter efuse - basically a name and a numeric value
+    ///
+    /// Useful for programming single-bit efuse values (boolean or not) as well as multi-bit values
+    /// which are not keys, key digests or the custom MAC
+    ///
+    /// For burning those, the equivalent of `espefuse.py burn_efuse` command is used
+    Param {
+        /// The name of the efuse, as documented here:
+        /// https://docs.espressif.com/projects/esptool/en/latest/esp32s3/espefuse/burn-efuse-cmd.html
+        name: String,
+        /// The value of the efuse, as a numeric value as documented here:
+        /// https://docs.espressif.com/projects/esptool/en/latest/esp32s3/espefuse/burn-efuse-cmd.html
+        value: u32,
+    },
+    /// A key efuse - a key value to be programmed
+    ///
+    /// Useful for programming keys
+    ///
+    /// For burning those, the equivalent of `espefuse.py burn_key` command is used
+    Key {
+        /// The block of the key efuse, as documented here:
+        /// https://docs.espressif.com/projects/esptool/en/latest/esp32s3/espefuse/burn-key-cmd.html
+        block: String,
+        /// The key value to be programmed, as documented here:
+        /// https://docs.espressif.com/projects/esptool/en/latest/esp32s3/espefuse/burn-key-cmd.html
+        key_value: Arc<Vec<u8>>,
+        /// The key purpose, as documented here:
+        /// https://docs.espressif.com/projects/esptool/en/latest/esp32s3/espefuse/burn-key-cmd.html
+        purpose: String,
+    },
+    /// A key digest efuse - a digest value to be programmed
+    ///
+    /// Useful for programming key digests (i.e. the Secure Boot V2 RSA key digest)
+    ///
+    /// For burning those, the equivalent of `espefuse.py burn_digest` command is used
+    KeyDigest {
+        /// The block of the key digest efuse, as documented here:
+        /// https://docs.espressif.com/projects/esptool/en/latest/esp32s3/espefuse/burn-key-digest-cmd.html
+        block: String,
+        /// The digest value to be programmed (public key in PEM format needs to be provided !!), as documented here:
+        /// https://docs.espressif.com/projects/esptool/en/latest/esp32s3/espefuse/burn-key-digest-cmd.html
+        digest_value: Arc<Vec<u8>>,
+        /// The key digest purpose, as documented here:
+        /// https://docs.espressif.com/projects/esptool/en/latest/esp32s3/espefuse/burn-key-digest-cmd.html
+        purpose: String,
+    },
+}
+
+impl Efuse {
+    /// Create a new `Efuse` from the given file name and file data
+    pub fn new(name: &str, data: Arc<Vec<u8>>) -> anyhow::Result<Self> {
+        let mut parts = name.split('-');
+
+        let ty = parts
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?;
+
+        match ty.to_ascii_lowercase().as_str() {
+            "param" => {
+                let name = parts
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?;
+                let value = u32::from_str_radix(
+                    parts
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?,
+                    16,
+                )?;
+
+                if parts.next().is_some() {
+                    anyhow::bail!("Invalid efuse name {name}");
+                }
+
+                if !data.is_empty() {
+                    anyhow::bail!("Invalid efuse data for efuse {name}: {} bytes provided, but no data expected", data.len());
+                }
+
+                Ok(Self::Param {
+                    name: name.to_string(),
+                    value,
+                })
+            }
+            "key" | "keydigest" => {
+                let block = parts
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?;
+                let purpose = parts
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?;
+
+                if parts.next().is_some() {
+                    anyhow::bail!("Invalid efuse name {name}");
+                }
+
+                if data.is_empty() {
+                    anyhow::bail!("Invalid efuse data for efuse {name}: empty");
+                }
+
+                if ty == "key" {
+                    Ok(Self::Key {
+                        block: block.to_string(),
+                        key_value: data,
+                        purpose: purpose.to_string(),
+                    })
+                } else {
+                    Ok(Self::KeyDigest {
+                        block: block.to_string(),
+                        digest_value: data,
+                        purpose: purpose.to_string(),
+                    })
+                }
+            }
+            _ => anyhow::bail!("Invalid efuse type {ty}"),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Param { name, .. } => name,
+            Self::Key { block, .. } => block,
+            Self::KeyDigest { block, .. } => block,
+        }
+    }
+
+    pub fn is_same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Param { name: name1, .. }, Self::Param { name: name2, .. }) => name1 == name2,
+            (Self::Key { block: block1, .. }, Self::Key { block: block2, .. }) => block1 == block2,
+            (Self::KeyDigest { block: block1, .. }, Self::KeyDigest { block: block2, .. }) => {
+                block1 == block2
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Display for Efuse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Param { name, value } => write!(f, "param-{}-{:08x}", name, value),
+            Self::Key { block, purpose, .. } => write!(f, "key-{}-{}", block, purpose),
+            Self::KeyDigest { block, purpose, .. } => write!(f, "keydigest-{}-{}", block, purpose),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
-pub struct Efuse {
-    pub name: String,
-    pub data: Arc<Vec<u8>>,
+pub struct EfuseMapping {
+    /// The efuse
+    pub efuse: Efuse,
+    /// The image to be flashed to the partition; if `None`, the partition will be left empty
+    pub status: ProvisioningStatus,
 }
 
 /// An image to be flashed to some partition

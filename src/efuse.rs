@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 use anyhow::Context;
@@ -76,4 +77,90 @@ where
         .context("Parsing the eFuse tool `summary` command output failed")?;
 
     Ok(summary)
+}
+
+pub fn burn_efuses<'a, I>(tools: &esptools::Tools, values: I) -> anyhow::Result<String>
+where
+    I: Iterator<Item = (&'a str, u32)>,
+{
+    let mut command = Command::new(tools.tool_path(esptools::Tool::EspEfuse));
+
+    command.arg("burn_efuse");
+
+    for (key, value) in values {
+        command.arg(key);
+        command.arg(value.to_string());
+    }
+
+    burn_exec(tools, "burn_efuse", &mut command)
+}
+
+pub fn burn_keys<'a, I>(tools: &esptools::Tools, values: I) -> anyhow::Result<String>
+where
+    I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
+{
+    burn_keys_or_digests(tools, "burn_key", values)
+}
+
+pub fn burn_key_digests<'a, I>(tools: &esptools::Tools, values: I) -> anyhow::Result<String>
+where
+    I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
+{
+    burn_keys_or_digests(tools, "burn_key_digest", values)
+}
+
+fn burn_keys_or_digests<'a, I>(
+    tools: &esptools::Tools,
+    cmd: &str,
+    values: I,
+) -> anyhow::Result<String>
+where
+    I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
+{
+    let mut command = Command::new(tools.tool_path(esptools::Tool::EspEfuse));
+
+    command.arg(cmd);
+
+    let mut temp_files = Vec::new();
+
+    for (key, value, purpose) in values {
+        command.arg(key);
+
+        let mut temp_file =
+            tempfile::NamedTempFile::new().context("Creation of eFuse temp key file failed")?;
+
+        temp_file
+            .write_all(value)
+            .context("Writing eFuse temp key file failed")?;
+
+        command.arg(temp_file.path().to_string_lossy().into_owned());
+
+        temp_files.push(temp_file);
+
+        command.arg(purpose);
+    }
+
+    burn_exec(tools, cmd, &mut command)
+}
+
+fn burn_exec(
+    _tools: &esptools::Tools,
+    command_desc: &str,
+    command: &mut Command,
+) -> anyhow::Result<String> {
+    let output = command
+        .output()
+        .context("Executing the eFuse tool with command `{command_desc}` failed")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "eFuse tool `{command_desc}` command failed with status: {}. Is the PCB connected? Stderr output:\n{}",
+            output.status,
+            core::str::from_utf8(&output.stderr).unwrap_or("???")
+        );
+    }
+
+    core::str::from_utf8(&output.stdout)
+        .context("Parsing the eFuse tool `{command_desc}` command output failed")
+        .map(str::to_string)
 }

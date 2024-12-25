@@ -1,6 +1,7 @@
 use core::fmt::{self, Display};
 use core::future::Future;
 
+use std::fmt::Write as _;
 use std::fs::{self, DirEntry, File};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -18,7 +19,7 @@ use espflash::flasher::ProgressCallbacks;
 
 use log::{error, info};
 
-use crate::bundle::{Bundle, Params, ProvisioningStatus};
+use crate::bundle::{Bundle, Efuse, Params, ProvisioningStatus};
 use crate::efuse;
 use crate::flash;
 use crate::input::{ConfirmOutcome, Input};
@@ -435,7 +436,7 @@ where
 
         info!("About to read Chip IDs from eFuse");
 
-        let efuse_values = unblock("efuse", || {
+        let efuse_values = unblock("efuse-summary", || {
             let tools = esptools::Tools::mount().context("Mounting esptools failed")?;
 
             let efuse_values = efuse::summary(&tools, EFUSE_VALUES.iter().copied())?;
@@ -534,7 +535,7 @@ where
         });
 
         info!(
-            "About to flash data:Chip: {chip:?}, Flash Size: {flash_size:?}, Images N: {}",
+            "About to flash data: Chip={chip:?}, Flash Size={flash_size:?}, Images N={}",
             flash_data.len()
         );
 
@@ -557,6 +558,19 @@ where
         .await?;
 
         info!("Flash complete");
+
+        info!("About to burn eFuses");
+
+        let model = self.model.clone();
+
+        unblock("efuse-burn", move || {
+            let tools = esptools::Tools::mount().context("Mounting esptools failed")?;
+
+            Self::burn(&model, &tools)
+        })
+        .await?;
+
+        info!("Burn complete");
 
         let bundle_loaded_dir = self.bundle_dir.join(Self::BUNDLE_LOADED_DIR_NAME);
         fs::create_dir_all(&bundle_loaded_dir)
@@ -710,6 +724,157 @@ where
             supply_default_partition_table,
             supply_default_bootloader,
         )
+    }
+
+    fn burn(model: &Model, tools: &esptools::Tools) -> anyhow::Result<String> {
+        let mut output = String::new();
+
+        model.modify(|state| {
+            let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+
+            for efuse in efuses {
+                efuse.status = ProvisioningStatus::Pending;
+            }
+        });
+
+        // Step 1: Burn key digests first
+
+        let mut digests = Vec::new();
+
+        model.access_mut(|state| {
+            let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+
+            let mut changed = false;
+
+            for efuse in efuses {
+                if let Efuse::KeyDigest {
+                    block,
+                    digest_value,
+                    purpose,
+                } = &efuse.efuse
+                {
+                    digests.push((block.clone(), digest_value.clone(), purpose.clone()));
+                }
+
+                efuse.status = ProvisioningStatus::Pending;
+                changed = true;
+            }
+
+            changed
+        });
+
+        if !digests.is_empty() {
+            let digests_output = efuse::burn_key_digests(
+                tools,
+                digests.iter().map(|(block, digest, purpose)| {
+                    (block.as_str(), digest.as_slice(), purpose.as_str())
+                }),
+            )
+            .context("Burning key digests failed")?;
+
+            model.modify(|state| {
+                let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+
+                for efuse in efuses {
+                    if let Efuse::KeyDigest { .. } = &efuse.efuse {
+                        efuse.status = ProvisioningStatus::Done;
+                    }
+                }
+            });
+
+            write!(&mut output, "{digests_output}\n\n")?;
+        }
+
+        // Step 2: Burn keys next
+
+        let mut keys = Vec::new();
+
+        model.access_mut(|state| {
+            let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+
+            let mut changed = false;
+
+            for efuse in efuses {
+                if let Efuse::Key {
+                    block,
+                    key_value,
+                    purpose,
+                } = &efuse.efuse
+                {
+                    keys.push((block.clone(), key_value.clone(), purpose.clone()));
+                }
+
+                efuse.status = ProvisioningStatus::Pending;
+                changed = true;
+            }
+
+            changed
+        });
+
+        if !keys.is_empty() {
+            let keys_output = efuse::burn_keys(
+                tools,
+                keys.iter().map(|(block, key, purpose)| {
+                    (block.as_str(), key.as_slice(), purpose.as_str())
+                }),
+            )
+            .context("Burning keys failed")?;
+
+            model.modify(|state| {
+                let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+
+                for efuse in efuses {
+                    if let Efuse::Key { .. } = &efuse.efuse {
+                        efuse.status = ProvisioningStatus::Done;
+                    }
+                }
+            });
+
+            write!(&mut output, "{keys_output}\n\n")?;
+        }
+
+        // Step 3: Finally, burn all params
+
+        let mut params = Vec::new();
+
+        model.access_mut(|state| {
+            let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+
+            let mut changed = false;
+
+            for efuse in efuses {
+                if let Efuse::Param { name, value } = &efuse.efuse {
+                    params.push((name.clone(), *value));
+                }
+
+                efuse.status = ProvisioningStatus::Pending;
+                changed = true;
+            }
+
+            changed
+        });
+
+        if !params.is_empty() {
+            let params_output = efuse::burn_efuses(
+                tools,
+                params.iter().map(|(name, value)| (name.as_str(), *value)),
+            )
+            .context("Burning params failed")?;
+
+            model.modify(|state| {
+                let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+
+                for efuse in efuses {
+                    if let Efuse::Param { .. } = &efuse.efuse {
+                        efuse.status = ProvisioningStatus::Done;
+                    }
+                }
+            });
+
+            write!(&mut output, "{params_output}\n\n")?;
+        }
+
+        Ok(output)
     }
 
     /// Handle a future failure by displaying an error message and waiting for a confirmation
