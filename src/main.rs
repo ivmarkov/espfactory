@@ -1,13 +1,11 @@
 use std::path::PathBuf;
 
 use async_compat::CompatExt;
-
 use clap::{ColorChoice, Parser, ValueEnum};
 
-use espfactory::loader::file::FileLoader;
-use espfactory::loader::{dir::DirLoader, http::HttpLoader, BundleLoader};
-use espfactory::uploader::{dir::DirLogsUploader, http::HttpLogsUploader, BundleLogsUploader};
-use espfactory::{BundleIdentification, Config, LOGGER};
+use espfactory::loader::Loader;
+use espfactory::uploader::{LogsUploader, MultilogsUploader};
+use espfactory::{self, BundleIdentification, LOGGER};
 
 use log::LevelFilter;
 
@@ -77,7 +75,7 @@ impl Verbosity {
 
 /// The configuration of the factory
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Settings {
+pub struct Config {
     /// The base URL of the factory
     pub base_url: Option<Url>,
     /// The source of bundles
@@ -85,10 +83,10 @@ pub struct Settings {
     /// The destinations where to upload logs
     pub logs_upload_urls: Vec<Url>,
     /// The configuration of the factory
-    pub config: Config,
+    pub config: espfactory::Config,
 }
 
-impl Settings {
+impl Config {
     /// Create a new configuration with default values
     /// (no port, no bundle identification method, no readouts)
     pub const fn new() -> Self {
@@ -96,163 +94,14 @@ impl Settings {
             base_url: None,
             url: None,
             logs_upload_urls: Vec::new(),
-            config: Config::new(),
+            config: espfactory::Config::new(),
         }
     }
 }
 
-impl Default for Settings {
+impl Default for Config {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Wrapper enum for the loaders supported OOTB
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum Loader {
-    /// Load a bundle from a file
-    File(FileLoader),
-    /// Load bundles from a directory
-    Dir(DirLoader),
-    /// Load bundles from an HTTP(s) server
-    Http(HttpLoader),
-    /// Load bundles from an S3 bucket
-    #[cfg(feature = "s3")]
-    S3(espfactory::loader::s3::S3Loader),
-}
-
-impl Loader {
-    pub fn new(url: &Url, delete_after_load_allowed: bool) -> anyhow::Result<Self> {
-        match url.scheme() {
-            "file" => Ok(Self::File(FileLoader::new(PathBuf::from(
-                url.path().to_string(),
-            )))),
-            "dir" | "dird" if delete_after_load_allowed => Ok(Self::Dir(DirLoader::new(
-                PathBuf::from(url.path().to_string()),
-                matches!(url.scheme(), "dird"),
-                None,
-            ))),
-            "http" | "https" => Ok(Self::Http(HttpLoader::new(
-                url.as_str().to_string(),
-                None,
-                None,
-            ))),
-            #[cfg(feature = "s3")]
-            "s3" | "s3d" if delete_after_load_allowed => {
-                let bucket = url
-                    .host_str()
-                    .ok_or_else(|| anyhow::anyhow!("No bucket provided in URL: {}", url))?
-                    .to_string();
-                let path = url.path().trim_matches('/');
-                let path = (!path.is_empty()).then(|| path.to_string());
-
-                Ok(Self::S3(espfactory::loader::s3::S3Loader::new(
-                    None,
-                    bucket,
-                    path,
-                    matches!(url.scheme(), "s3d"),
-                    None,
-                    None,
-                )))
-            }
-            _ => anyhow::bail!("Unsupported bundle load URL: {url}"),
-        }
-    }
-}
-
-impl BundleLoader for Loader {
-    async fn load<W>(&mut self, write: W, id: Option<&str>) -> anyhow::Result<String>
-    where
-        W: std::io::Write,
-    {
-        match self {
-            Self::File(loader) => loader.load(write, id).await,
-            Self::Dir(loader) => loader.load(write, id).await,
-            Self::Http(loader) => loader.load(write, id).await,
-            #[cfg(feature = "s3")]
-            Self::S3(loader) => loader.load(write, id).await,
-        }
-    }
-}
-
-/// Wrapper enum for the loaders supported OOTB
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum LogsUploader {
-    /// Load bundles from a directory
-    Dir(DirLogsUploader),
-    /// Load bundles from an HTTP(s) server
-    Http(HttpLogsUploader),
-    /// Load bundles from an S3 bucket
-    #[cfg(feature = "s3")]
-    S3(espfactory::uploader::s3::S3LogsUploader),
-}
-
-impl LogsUploader {
-    pub fn new(url: &Url) -> anyhow::Result<Self> {
-        match url.scheme() {
-            "dir" => Ok(Self::Dir(DirLogsUploader::new(PathBuf::from(
-                url.path().to_string(),
-            )))),
-            "http" | "https" => Ok(Self::Http(HttpLogsUploader::new(
-                url.as_str().to_string(),
-                None,
-            ))),
-            #[cfg(feature = "s3")]
-            "s3" => {
-                let bucket = url
-                    .host_str()
-                    .ok_or_else(|| anyhow::anyhow!("No bucket provided in URL: {}", url))?
-                    .to_string();
-                let path = url.path().trim_matches('/');
-                let path = (!path.is_empty()).then(|| path.to_string());
-
-                Ok(Self::S3(espfactory::uploader::s3::S3LogsUploader::new(
-                    None, bucket, path,
-                )))
-            }
-            _ => anyhow::bail!("Unsupported logs upload URL: {url}"),
-        }
-    }
-}
-
-impl BundleLogsUploader for LogsUploader {
-    async fn upload_logs<R>(&mut self, read: R, id: Option<&str>, name: &str) -> anyhow::Result<()>
-    where
-        R: std::io::Read + std::io::Seek,
-    {
-        match self {
-            Self::Dir(loader) => loader.upload_logs(read, id, name).await,
-            Self::Http(loader) => loader.upload_logs(read, id, name).await,
-            #[cfg(feature = "s3")]
-            Self::S3(loader) => loader.upload_logs(read, id, name).await,
-        }
-    }
-}
-
-struct Multi<'a, T>(&'a mut [T]);
-
-impl<'a, T> BundleLogsUploader for Multi<'a, T>
-where
-    T: BundleLogsUploader,
-{
-    async fn upload_logs<R>(
-        &mut self,
-        mut read: R,
-        id: Option<&str>,
-        name: &str,
-    ) -> anyhow::Result<()>
-    where
-        R: std::io::Read + std::io::Seek,
-    {
-        for uploader in self.0.iter_mut() {
-            if let Err(err) = uploader.upload_logs(&mut read, id, name).await {
-                log::error!("Error when uploading logs: {err}");
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -272,11 +121,11 @@ fn run() -> anyhow::Result<()> {
     let conf = if let Some(conf) = args.conf {
         toml::from_str(&std::fs::read_to_string(conf)?)?
     } else {
-        Settings {
+        Config {
             base_url: None,
             url: None,
             logs_upload_urls: Vec::new(),
-            config: Config {
+            config: espfactory::Config {
                 dry_run: true,
                 bundle_identification: BundleIdentification::BoxId,
                 test_jig_id_readout: true,
@@ -331,7 +180,7 @@ fn run() -> anyhow::Result<()> {
             bundle_dir,
             base_loader,
             loader,
-            Multi(&mut logs_uploaders),
+            MultilogsUploader(&mut logs_uploaders),
         )
         .compat(),
     )?;

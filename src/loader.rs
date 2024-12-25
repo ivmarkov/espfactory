@@ -1,4 +1,7 @@
 use std::io::Write;
+use std::path::PathBuf;
+
+use url::Url;
 
 pub mod dir;
 pub mod file;
@@ -91,5 +94,74 @@ where
         W: Write,
     {
         (*self).load(write, id).await
+    }
+}
+
+/// Wrapper enum for the loaders supported OOTB
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum Loader {
+    /// Load a bundle from a file
+    File(file::FileLoader),
+    /// Load bundles from a directory
+    Dir(dir::DirLoader),
+    /// Load bundles from an HTTP(s) server
+    Http(http::HttpLoader),
+    /// Load bundles from an S3 bucket
+    #[cfg(feature = "s3")]
+    S3(s3::S3Loader),
+}
+
+impl Loader {
+    pub fn new(url: &Url, delete_after_load_allowed: bool) -> anyhow::Result<Self> {
+        match url.scheme() {
+            "file" => Ok(Self::File(file::FileLoader::new(PathBuf::from(
+                url.path().to_string(),
+            )))),
+            "dir" | "dird" if delete_after_load_allowed => Ok(Self::Dir(dir::DirLoader::new(
+                PathBuf::from(url.path().to_string()),
+                matches!(url.scheme(), "dird"),
+                None,
+            ))),
+            "http" | "https" => Ok(Self::Http(http::HttpLoader::new(
+                url.as_str().to_string(),
+                None,
+                None,
+            ))),
+            #[cfg(feature = "s3")]
+            "s3" | "s3d" if delete_after_load_allowed => {
+                let bucket = url
+                    .host_str()
+                    .ok_or_else(|| anyhow::anyhow!("No bucket provided in URL: {}", url))?
+                    .to_string();
+                let path = url.path().trim_matches('/');
+                let path = (!path.is_empty()).then(|| path.to_string());
+
+                Ok(Self::S3(s3::S3Loader::new(
+                    None,
+                    bucket,
+                    path,
+                    matches!(url.scheme(), "s3d"),
+                    None,
+                    None,
+                )))
+            }
+            _ => anyhow::bail!("Unsupported bundle load URL: {url}"),
+        }
+    }
+}
+
+impl BundleLoader for Loader {
+    async fn load<W>(&mut self, write: W, id: Option<&str>) -> anyhow::Result<String>
+    where
+        W: std::io::Write,
+    {
+        match self {
+            Self::File(loader) => loader.load(write, id).await,
+            Self::Dir(loader) => loader.load(write, id).await,
+            Self::Http(loader) => loader.load(write, id).await,
+            #[cfg(feature = "s3")]
+            Self::S3(loader) => loader.load(write, id).await,
+        }
     }
 }
