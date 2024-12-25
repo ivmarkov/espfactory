@@ -471,24 +471,31 @@ where
     async fn prep_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<()> {
         let bundle = Self::prep_one_bundle(
             &self.model,
-            self.conf,
             self.bundle_dir,
             bundle_id,
             &mut self.bundle_loader,
+            self.bundle_base_loader.is_none() && self.conf.supply_default_partition_table,
+            self.bundle_base_loader.is_none() && self.conf.supply_default_bootloader,
         )
         .await?;
 
         let bundle = if let Some(base_loader) = self.bundle_base_loader.as_mut() {
-            let mut base_bundle =
-                Self::prep_one_bundle(&self.model, self.conf, self.bundle_dir, None, base_loader)
-                    .await?;
+            let mut base_bundle = Self::prep_one_bundle(
+                &self.model,
+                self.bundle_dir,
+                None,
+                base_loader,
+                self.conf.supply_default_partition_table,
+                self.conf.supply_default_bootloader,
+            )
+            .await?;
 
             self.model.modify(|state| {
                 state.processing_mut().status =
                     format!("Merging {} and {}", base_bundle.name, bundle.name);
             });
 
-            base_bundle.add(bundle, false /*ovewrite*/)?;
+            base_bundle.add(bundle, self.conf.overwrite_on_merge)?;
 
             base_bundle
         } else {
@@ -669,10 +676,11 @@ where
     /// in the bundle workspace directory
     async fn prep_one_bundle<T>(
         model: &Model,
-        conf: &Config,
         bundle_dir: &Path,
         bundle_id: Option<&str>,
         loader: T,
+        supply_default_partition_table: bool,
+        supply_default_bootloader: bool,
     ) -> anyhow::Result<Bundle>
     where
         T: BundleLoader,
@@ -699,8 +707,8 @@ where
             bundle_name,
             Params::default(),
             &mut bundle_file,
-            conf.supply_default_partition_table,
-            conf.supply_default_bootloader,
+            supply_default_partition_table,
+            supply_default_bootloader,
         )
     }
 

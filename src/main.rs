@@ -4,6 +4,7 @@ use async_compat::CompatExt;
 
 use clap::{ColorChoice, Parser, ValueEnum};
 
+use espfactory::loader::file::FileLoader;
 use espfactory::loader::{dir::DirLoader, http::HttpLoader, BundleLoader};
 use espfactory::uploader::{dir::DirLogsUploader, http::HttpLogsUploader, BundleLogsUploader};
 use espfactory::{BundleIdentification, Config, LOGGER};
@@ -27,14 +28,28 @@ struct Cli {
     #[arg(short = 'c', long)]
     conf: Option<PathBuf>,
 
-    /// Base bundle URL
+    /// Base bundle URL - the URL where the factory will look for a base bundle to load.
+    /// Supported URL schemes:
+    /// `file:` - load a base bundle from a file;
+    /// `dir:` - load a base bundle from a directory;
+    /// `http:` or `https:` - load a base bundle from an HTTP(s) server;
+    /// `s3:` - load a base bundle from an S3 bucket
     #[arg(short = 'b', long)]
     base_url: Option<Url>,
 
-    /// Bundle URL
+    /// Bundle URL - the URL where the factory will look for a bundle to load.
+    /// Supported URL schemes:
+    /// `file:` - load a bundle from a file;
+    /// `dir:` or `dird:` - load bundles from a directory; if `dird:` is used, the bundle will be removed after loading;
+    /// `http:` or `https:` - load bundles from an HTTP(s) server;
+    /// `s3:` or `s3d:` - load bundles from an S3 bucket; if `s3d:` is used, the bundle will be removed after loading
     url: Option<Url>,
 
-    /// Logs upload URLs
+    /// Logs upload URLs - the URLs where the factory will upload the logs from the device provisioning.
+    /// Supported URL schemes:
+    /// `dir:` - upload logs to a directory;
+    /// `http:` or `https:` - upload logs to an HTTP(s) server;
+    /// `s3:` - upload logs to an S3 bucket
     logs_urls: Vec<Url>,
 }
 
@@ -96,6 +111,8 @@ impl Default for Settings {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Loader {
+    /// Load a bundle from a file
+    File(FileLoader),
     /// Load bundles from a directory
     Dir(DirLoader),
     /// Load bundles from an HTTP(s) server
@@ -106,9 +123,12 @@ pub enum Loader {
 }
 
 impl Loader {
-    pub fn new(url: &Url) -> anyhow::Result<Self> {
+    pub fn new(url: &Url, delete_after_load_allowed: bool) -> anyhow::Result<Self> {
         match url.scheme() {
-            "dir" | "dird" => Ok(Self::Dir(DirLoader::new(
+            "file" => Ok(Self::File(FileLoader::new(PathBuf::from(
+                url.path().to_string(),
+            )))),
+            "dir" | "dird" if delete_after_load_allowed => Ok(Self::Dir(DirLoader::new(
                 PathBuf::from(url.path().to_string()),
                 matches!(url.scheme(), "dird"),
                 None,
@@ -119,7 +139,7 @@ impl Loader {
                 None,
             ))),
             #[cfg(feature = "s3")]
-            "s3" | "s3d" => {
+            "s3" | "s3d" if delete_after_load_allowed => {
                 let bucket = url
                     .host_str()
                     .ok_or_else(|| anyhow::anyhow!("No bucket provided in URL: {}", url))?
@@ -147,6 +167,7 @@ impl BundleLoader for Loader {
         W: std::io::Write,
     {
         match self {
+            Self::File(loader) => loader.load(write, id).await,
             Self::Dir(loader) => loader.load(write, id).await,
             Self::Http(loader) => loader.load(write, id).await,
             #[cfg(feature = "s3")]
@@ -235,7 +256,14 @@ where
     }
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("Error: {err:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     let args = Cli::parse();
 
     log::set_logger(&LOGGER).unwrap();
@@ -261,14 +289,17 @@ fn main() -> anyhow::Result<()> {
 
     let base_loader_url = args.base_url.or_else(|| conf.base_url.clone());
 
-    let base_loader = base_loader_url.as_ref().map(Loader::new).transpose()?;
+    let base_loader = base_loader_url
+        .as_ref()
+        .map(|url| Loader::new(url, false))
+        .transpose()?;
 
     let loader_url = args.url.or_else(|| conf.url.clone());
     let Some(loader_url) = loader_url else {
         anyhow::bail!("No bundle URL provided");
     };
 
-    let loader = Loader::new(&loader_url)?;
+    let loader = Loader::new(&loader_url, true)?;
 
     let mut logs_upload_urls = args.logs_urls;
 

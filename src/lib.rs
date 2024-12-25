@@ -77,11 +77,13 @@ pub struct Config {
     /// Whether to supply the default bootloader if the loaded bundle does not contain one
     #[serde(default = "default_bool::<true>")]
     pub supply_default_bootloader: bool,
+    /// When a base bundle is used: whether to overwrite the base bundle images with the non-base ones
+    /// during the bundles' merge operation
+    pub overwrite_on_merge: bool,
 }
 
 impl Config {
     /// Create a new configuration with default values
-    /// (no port, no bundle identification method, no readouts)
     pub const fn new() -> Self {
         Self {
             dry_run: false,
@@ -94,6 +96,7 @@ impl Config {
             skip_confirmations: false,
             supply_default_partition_table: true,
             supply_default_bootloader: true,
+            overwrite_on_merge: false,
         }
     }
 }
