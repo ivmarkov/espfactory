@@ -1,5 +1,5 @@
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -22,6 +22,7 @@ use super::BundleLoader;
 pub struct DirLoader {
     path: PathBuf,
     delete_after_load: bool,
+    #[allow(unused)]
     logs_path: Option<PathBuf>,
 }
 
@@ -32,6 +33,9 @@ impl DirLoader {
     /// - `path`: The path to the directory to load the bundles from
     /// - `delete_after_load`: A flag indicating whether the loaded bundle should be deleted from the directory after loading
     ///   Only used when a bundle is loaded without a supplied ID (i.e. a random bundle)
+    /// - `logs_path`: An optional path to the directory where the logs are uploaded;
+    ///   if provided, the loader will only download a bundle if its logs are not yet uploaded, this preventing
+    ///   flashing a bundle multiple times
     pub const fn new(path: PathBuf, delete_after_load: bool, logs_path: Option<PathBuf>) -> Self {
         Self {
             path,
@@ -117,39 +121,5 @@ impl BundleLoader for DirLoader {
         } else {
             anyhow::bail!("No files found in bundles' directory")
         }
-    }
-
-    async fn upload_logs<R>(
-        &mut self,
-        mut read: R,
-        id: Option<&str>,
-        name: &str,
-    ) -> anyhow::Result<()>
-    where
-        R: Read,
-    {
-        let Some(logs_path) = self.logs_path.as_deref() else {
-            return Ok(());
-        };
-
-        if let Some(id) = id {
-            info!(
-                "About to save logs `{name}.log.zip` for ID `{id}` to directory `{}`...",
-                logs_path.display()
-            );
-        } else {
-            info!(
-                "About to save logs `{name}.log.zip` to directory `{}`...",
-                logs_path.display()
-            )
-        }
-
-        let mut file = File::create(logs_path.join(format!("{}.log.zip", name)))
-            .context("Saving the bundle log failed")?;
-        io::copy(&mut read, &mut file).context("Saving the bundle log failed")?;
-
-        info!("Logs `{name}.log.zip` uploaded");
-
-        Ok(())
     }
 }

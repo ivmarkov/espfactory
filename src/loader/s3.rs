@@ -1,14 +1,12 @@
 use core::fmt::{self, Display};
 
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 
 use anyhow::Context;
+use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::get_object::GetObjectError;
-use aws_sdk_s3::{error::SdkError, primitives::ByteStream};
 
 use log::info;
-
-use tempfile::tempfile;
 
 use super::{BundleLoader, BundleType};
 
@@ -36,76 +34,39 @@ pub struct S3Loader {
     load_bucket: String,
     load_prefix: Option<String>,
     delete_after_load: bool,
-    logs_upload_bucket: Option<String>,
-    logs_upload_prefix: Option<String>,
+    #[allow(unused)]
+    logs_bucket: Option<String>,
+    #[allow(unused)]
+    logs_prefix: Option<String>,
 }
 
 impl S3Loader {
-    pub fn new_from_path(
-        config: Option<aws_config::SdkConfig>,
-        load_path: String,
-        delete_after_load: bool,
-        logs_upload_path: Option<String>,
-    ) -> Self {
-        let load_path = load_path.trim_matches('/');
-        let (load_bucket, load_prefix) = if let Some(split) = load_path.find('/') {
-            let (load_bucket, load_prefix) = load_path.split_at(split);
-
-            (load_bucket, Some(load_prefix[1..].to_string()))
-        } else {
-            (load_path, None)
-        };
-
-        let (logs_upload_bucket, logs_upload_prefix) =
-            if let Some(logs_upload_path) = logs_upload_path {
-                let logs_upload_path = logs_upload_path.trim_matches('/');
-
-                if let Some(split) = logs_upload_path.find('/') {
-                    let (logs_upload_bucket, logs_upload_prefix) = logs_upload_path.split_at(split);
-
-                    (
-                        Some(logs_upload_bucket.to_string()),
-                        Some(logs_upload_prefix[1..].to_string()),
-                    )
-                } else {
-                    (Some(logs_upload_path.to_string()), None)
-                }
-            } else {
-                (None, None)
-            };
-
-        Self::new(
-            config,
-            load_bucket.to_string(),
-            load_prefix.map(|p| p.to_string()),
-            delete_after_load,
-            logs_upload_bucket,
-            logs_upload_prefix,
-        )
-    }
-
     /// Creates a new `S3Loader` instance
     ///
     /// # Arguments
-    /// - `bucket`: The name of the S3 bucket to load the bundles from
-    /// - `prefix_key`: An optional prefix key to use when loading the bundles
+    /// - `load_bucket`: The name of the S3 bucket to load the bundles from
+    /// - `load_prefix`: An optional prefix key to use when loading the bundles
     /// - `delete_after_load`: A flag indicating whether the loaded bundle should be deleted from the bucket after loading
     ///   Used only when loading a random bundle (i.e., the `id` argument when calling `load` is not provided)
+    /// - `logs_bucket`: An optional name of the S3 bucket where the logs are uploaded;
+    ///   if provided, the loader will only download a bundle if its logs are not yet uploaded, this preventing
+    ///   flashing a bundle multiple times
+    /// - `logs_prefix`: An optional prefix key to use when checking for uploaded logs
     pub const fn new(
         config: Option<aws_config::SdkConfig>,
         load_bucket: String,
         load_prefix: Option<String>,
         delete_after_load: bool,
-        logs_upload_bucket: Option<String>,
-        logs_upload_prefix: Option<String>,
+        logs_bucket: Option<String>,
+        logs_prefix: Option<String>,
     ) -> Self {
         Self {
             config,
             load_bucket,
             load_prefix,
             delete_after_load,
-            logs_upload_bucket,
-            logs_upload_prefix,
+            logs_bucket,
+            logs_prefix,
         }
     }
 }
@@ -237,75 +198,6 @@ impl BundleLoader for S3Loader {
         } else {
             anyhow::bail!("No bundles found in the bucket")
         }
-    }
-
-    async fn upload_logs<R>(
-        &mut self,
-        mut read: R,
-        id: Option<&str>,
-        name: &str,
-    ) -> anyhow::Result<()>
-    where
-        R: Read,
-    {
-        let Some(logs_upload_bucket) = self.logs_upload_bucket.as_deref() else {
-            return Ok(());
-        };
-
-        if let Some(id) = id {
-            info!(
-                "About to upload logs `{name}.log.zip` for ID `{id}` to S3 bucket `{}`...",
-                BucketWithPrefix::new(logs_upload_bucket, self.logs_upload_prefix.as_deref())
-            );
-        } else {
-            info!(
-                "About to uploads logs `{name}.log.zip` to S3 bucket `{}`...",
-                BucketWithPrefix::new(logs_upload_bucket, self.logs_upload_prefix.as_deref())
-            );
-        }
-
-        let config = if let Some(config) = self.config.as_ref() {
-            config.clone()
-        } else {
-            aws_config::load_from_env().await
-        };
-
-        let client = aws_sdk_s3::Client::new(&config);
-
-        let key = self
-            .logs_upload_prefix
-            .as_deref()
-            .map(|prefix| format!("{prefix}/{name}.log.zip"))
-            .unwrap_or(format!("{name}.log.zip"));
-
-        let mut temp_file = tempfile().context("Uploading the bundle log failed")?;
-        std::io::copy(&mut read, &mut temp_file).context("Uploading the bundle log failed")?;
-
-        temp_file
-            .flush()
-            .context("Uploading the bundle log failed")?;
-        temp_file
-            .seek(SeekFrom::Start(0))
-            .context("Uploading the bundle log failed")?;
-
-        client
-            .put_object()
-            .bucket(logs_upload_bucket)
-            .key(key)
-            .body(
-                ByteStream::read_from()
-                    .file(temp_file.into())
-                    .build()
-                    .await
-                    .context("Uploading the bundle log failed")?,
-            )
-            .send()
-            .await
-            .context("Uploading the bundle log failed")?;
-
-        info!("Logs `{name}.log.zip` uploaded");
-
-        Ok(())
     }
 }
 

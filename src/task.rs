@@ -24,6 +24,7 @@ use crate::flash;
 use crate::input::{ConfirmOutcome, Input};
 use crate::loader::BundleLoader;
 use crate::model::{Model, Processing, Provision, Readout, State};
+use crate::uploader::BundleLogsUploader;
 use crate::utils::futures::unblock;
 use crate::{BundleIdentification, Config, LOGGER};
 
@@ -31,16 +32,20 @@ extern crate alloc;
 
 /// A task that runs the factory application and represents the lifecycle states of provisioning a bundle
 /// (readouts, preparing, provisioning, etc.)
-pub struct Task<'a, T> {
+pub struct Task<'a, B, L, U> {
     model: Arc<Model>,
     conf: &'a Config,
     bundle_dir: &'a Path,
-    bundle_loader: T,
+    bundle_base_loader: Option<B>,
+    bundle_loader: L,
+    bundle_logs_uploader: U,
 }
 
-impl<'a, T> Task<'a, T>
+impl<'a, B, L, U> Task<'a, B, L, U>
 where
-    T: BundleLoader,
+    B: BundleLoader,
+    L: BundleLoader,
+    U: BundleLogsUploader,
 {
     const BUNDLE_TEMP_DIR_NAME: &'static str = "temp";
     const BUNDLE_LOADED_DIR_NAME: &'static str = "loaded";
@@ -53,18 +58,27 @@ where
     ///   the task modifies the model, the UI renders the model and the input processing triggers model changes on terminal resize events (MVC)
     /// - `conf` - the configuration of the task
     /// - `bundle_dir` - the directory where the bundles are stored
-    /// - `bundle_loader` - the loader used to load the bundles
+    /// - `bundle_base_loader` - An optional loader used to load the base bundle; the base bundle (if used)
+    ///   usually contains the device-independent payloads like the bootloader, the partition image
+    ///   and the factory app image
+    /// - `bundle_loader` - The loader used to load the bundle; in case `bundle_base_loader` is used, this
+    ///   loader is used to load the device-specific payloads like the NVS partitions. The two bundles are then merged
+    /// - `bundle_logs_uploader` - The uploader used to upload the logs from the device provisioning to the server
     pub fn new(
         model: Arc<Model>,
         conf: &'a Config,
         bundle_dir: &'a Path,
-        bundle_loader: T,
+        bundle_base_loader: Option<B>,
+        bundle_loader: L,
+        bundle_logs_uploader: U,
     ) -> Self {
         Self {
             model,
             conf,
             bundle_dir,
+            bundle_base_loader,
             bundle_loader,
+            bundle_logs_uploader,
         }
     }
 
@@ -211,7 +225,7 @@ where
             // Step 5
             if let Some(log_file) = LOGGER.lock(|logger| logger.swap_out(None)) {
                 let log = super::logger::file::finish(log_file, &summary)?;
-                self.bundle_loader
+                self.bundle_logs_uploader
                     .upload_logs(log, bundle_id.as_deref(), &bundle_name)
                     .await?;
             }
@@ -452,120 +466,34 @@ where
         Ok(())
     }
 
-    /// Load the bundle from the storage of the bundle loader into the bundle workspace directory
-    async fn load_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<PathBuf> {
-        let bundle = loop {
-            self.model.modify(|state| {
-                state.processing_mut().status = "Checking".into();
-            });
-
-            if bundle_id.is_none() {
-                // - Only preserve the loaded bundle if no bundle ID is provided
-                //   (i.e. a random bundle is to be downloaded, used, and possibly deleted from the server)
-                // - For bundles with a bundle ID, always re-download the bundle using the loader
-
-                let loaded_path = self.bundle_dir.join(Self::BUNDLE_LOADED_DIR_NAME);
-                fs::create_dir_all(&loaded_path)
-                    .context("Creating loaded bundle directory failed")?;
-
-                let files: Result<Vec<DirEntry>, _> = fs::read_dir(&loaded_path)
-                    .context("Listing loaded bundle directory failed")?
-                    .collect();
-
-                let files = files.context("Listing loaded bundle directory failed")?;
-
-                if files.len() > 1 {
-                    anyhow::bail!("More than one bundle found in the bundle workspace directory");
-                }
-
-                if files.len() == 1 {
-                    break files[0].path();
-                }
-            }
-
-            self.model.modify(|state| {
-                state.processing_mut().status = "Fetching".into();
-            });
-
-            let mut bundle_temp_path = self
-                .bundle_dir
-                .join(Self::BUNDLE_TEMP_DIR_NAME)
-                .join("bundle");
-            fs::create_dir_all(bundle_temp_path.parent().unwrap())
-                .context("Creating the temp bundle directory failed")?;
-
-            let bundle_name = {
-                let result = {
-                    let mut temp_file = File::create(&bundle_temp_path)
-                        .context("Creating temp bundle file failed")?;
-
-                    self.bundle_loader.load(&mut temp_file, bundle_id).await
-                };
-
-                match result {
-                    Ok(bundle_name) => {
-                        let bundle_new_temp_path = self.bundle_dir.join(&bundle_name);
-                        fs::rename(&bundle_temp_path, &bundle_new_temp_path)
-                            .context("Renaming temp bundle file failed")?;
-
-                        bundle_temp_path = bundle_new_temp_path;
-
-                        bundle_name
-                    }
-                    Err(err) => Err(err)?,
-                }
-            };
-
-            if bundle_id.is_none() {
-                // Move the loaded random bundle to the loaded path so as not to lose it if the user interrupts the provisioning process
-
-                let bundle_loaded_path = self
-                    .bundle_dir
-                    .join(Self::BUNDLE_LOADED_DIR_NAME)
-                    .join(&bundle_name);
-                fs::create_dir_all(bundle_loaded_path.parent().unwrap())
-                    .context("Creating the loaded bundle directory failed")?;
-
-                fs::rename(bundle_temp_path, bundle_loaded_path)
-                    .context("Moving the temp bundle into the loaded bundle directory failed")?;
-            } else {
-                break bundle_temp_path;
-            }
-        };
-
-        info!("Bundle loaded into file `{}`", bundle.display());
-
-        Ok(bundle)
-    }
-
     /// Prepare the bundle to be provisioned by creating a `Bundle` instance from the loaded bundle content
     /// in the bundle workspace directory
     async fn prep_bundle(&mut self, bundle_id: Option<&str>) -> anyhow::Result<()> {
-        let bundle_path = self.load_bundle(bundle_id).await?;
+        let bundle = Self::prep_one_bundle(
+            &self.model,
+            self.conf,
+            self.bundle_dir,
+            bundle_id,
+            &mut self.bundle_loader,
+        )
+        .await?;
 
-        let bundle_name = bundle_path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string(); // TODO
+        let bundle = if let Some(base_loader) = self.bundle_base_loader.as_mut() {
+            let mut base_bundle =
+                Self::prep_one_bundle(&self.model, self.conf, self.bundle_dir, None, base_loader)
+                    .await?;
 
-        self.model.modify(|state| {
-            state.processing_mut().status = format!("Processing {bundle_name}");
-        });
+            self.model.modify(|state| {
+                state.processing_mut().status =
+                    format!("Merging {} and {}", base_bundle.name, bundle.name);
+            });
 
-        info!("About to prep bundle file `{}`", bundle_path.display());
+            base_bundle.add(bundle, false /*ovewrite*/)?;
 
-        let mut bundle_file =
-            File::open(bundle_path).context("Opening the loaded bundle file failed")?;
-
-        let bundle = Bundle::create(
-            bundle_name,
-            Params::default(),
-            &mut bundle_file,
-            self.conf.supply_default_partition_table,
-            self.conf.supply_default_bootloader,
-        )?;
+            base_bundle
+        } else {
+            bundle
+        };
 
         self.model.modify(move |state| {
             *state = State::Provision(Provision {
@@ -645,6 +573,135 @@ where
         });
 
         Ok(())
+    }
+
+    /// Load a bundle from the storage of the bundle loader into the bundle workspace directory
+    async fn load_one_bundle<T>(
+        model: &Model,
+        bundle_dir: &Path,
+        bundle_id: Option<&str>,
+        mut loader: T,
+    ) -> anyhow::Result<PathBuf>
+    where
+        T: BundleLoader,
+    {
+        let bundle = loop {
+            model.modify(|state| {
+                state.processing_mut().status = "Checking".into();
+            });
+
+            if bundle_id.is_none() {
+                // - Only preserve the loaded bundle if no bundle ID is provided
+                //   (i.e. a random bundle is to be downloaded, used, and possibly deleted from the server)
+                // - For bundles with a bundle ID, always re-download the bundle using the loader
+
+                let loaded_path = bundle_dir.join(Self::BUNDLE_LOADED_DIR_NAME);
+                fs::create_dir_all(&loaded_path)
+                    .context("Creating loaded bundle directory failed")?;
+
+                let files: Result<Vec<DirEntry>, _> = fs::read_dir(&loaded_path)
+                    .context("Listing loaded bundle directory failed")?
+                    .collect();
+
+                let files = files.context("Listing loaded bundle directory failed")?;
+
+                if files.len() > 1 {
+                    anyhow::bail!("More than one bundle found in the bundle workspace directory");
+                }
+
+                if files.len() == 1 {
+                    break files[0].path();
+                }
+            }
+
+            model.modify(|state| {
+                state.processing_mut().status = "Fetching".into();
+            });
+
+            let mut bundle_temp_path = bundle_dir.join(Self::BUNDLE_TEMP_DIR_NAME).join("bundle");
+            fs::create_dir_all(bundle_temp_path.parent().unwrap())
+                .context("Creating the temp bundle directory failed")?;
+
+            let bundle_name = {
+                let result = {
+                    let mut temp_file = File::create(&bundle_temp_path)
+                        .context("Creating temp bundle file failed")?;
+
+                    loader.load(&mut temp_file, bundle_id).await
+                };
+
+                match result {
+                    Ok(bundle_name) => {
+                        let bundle_new_temp_path = bundle_dir.join(&bundle_name);
+                        fs::rename(&bundle_temp_path, &bundle_new_temp_path)
+                            .context("Renaming temp bundle file failed")?;
+
+                        bundle_temp_path = bundle_new_temp_path;
+
+                        bundle_name
+                    }
+                    Err(err) => Err(err)?,
+                }
+            };
+
+            if bundle_id.is_none() {
+                // Move the loaded random bundle to the loaded path so as not to lose it if the user interrupts the provisioning process
+
+                let bundle_loaded_path = bundle_dir
+                    .join(Self::BUNDLE_LOADED_DIR_NAME)
+                    .join(&bundle_name);
+                fs::create_dir_all(bundle_loaded_path.parent().unwrap())
+                    .context("Creating the loaded bundle directory failed")?;
+
+                fs::rename(bundle_temp_path, bundle_loaded_path)
+                    .context("Moving the temp bundle into the loaded bundle directory failed")?;
+            } else {
+                break bundle_temp_path;
+            }
+        };
+
+        info!("Bundle loaded into file `{}`", bundle.display());
+
+        Ok(bundle)
+    }
+
+    /// Prepare a bundle to be provisioned by creating a `Bundle` instance from the loaded bundle content
+    /// in the bundle workspace directory
+    async fn prep_one_bundle<T>(
+        model: &Model,
+        conf: &Config,
+        bundle_dir: &Path,
+        bundle_id: Option<&str>,
+        loader: T,
+    ) -> anyhow::Result<Bundle>
+    where
+        T: BundleLoader,
+    {
+        let bundle_path = Self::load_one_bundle(model, bundle_dir, bundle_id, loader).await?;
+
+        let bundle_name = bundle_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string(); // TODO
+
+        model.modify(|state| {
+            state.processing_mut().status = format!("Processing {bundle_name}");
+        });
+
+        info!("About to prep bundle file `{}`", bundle_path.display());
+
+        let mut bundle_file =
+            File::open(bundle_path).context("Opening the loaded bundle file failed")?;
+
+        Bundle::create(
+            bundle_name,
+            Params::default(),
+            &mut bundle_file,
+            conf.supply_default_partition_table,
+            conf.supply_default_bootloader,
+        )
     }
 
     /// Handle a future failure by displaying an error message and waiting for a confirmation

@@ -1,9 +1,8 @@
-use std::io::{Read, Write};
+use std::io::Write;
 
 use anyhow::Context;
 
 use log::info;
-
 
 use super::BundleLoader;
 
@@ -27,26 +26,26 @@ use super::BundleLoader;
 pub struct HttpLoader {
     load_url: String,
     auth: Option<String>,
-    logs_upload_url: Option<String>,
+    #[allow(unused)]
+    logs_url: Option<String>,
 }
 
 impl HttpLoader {
     /// Creates a new `HttpLoader`
     ///
     /// # Arguments
-    /// - `url`: The URL of the server to load the bundles from
+    /// - `load_url`: The URL of the server to load the bundles from
     /// - `auth`: An optional authorization token to use when loading the bundles
     ///           If present, it will be used as the value of the `Authorization` header
     ///           in the request
-    pub const fn new(
-        load_url: String,
-        auth: Option<String>,
-        logs_upload_url: Option<String>,
-    ) -> Self {
+    /// - `logs_url`: An optional URL of the server to check for uploaded logs;
+    ///   if provided, the loader will only download a bundle if its logs are not yet uploaded, this preventing
+    ///   flashing a bundle multiple times
+    pub const fn new(load_url: String, auth: Option<String>, logs_url: Option<String>) -> Self {
         Self {
             load_url,
             auth,
-            logs_upload_url,
+            logs_url,
         }
     }
 }
@@ -112,53 +111,5 @@ impl BundleLoader for HttpLoader {
         info!("Loaded bundle `{}`", bundle_name);
 
         Ok(bundle_name)
-    }
-
-    async fn upload_logs<R>(&mut self, read: R, id: Option<&str>, name: &str) -> anyhow::Result<()>
-    where
-        R: Read,
-    {
-        let Some(logs_upload_url) = self.logs_upload_url.as_deref() else {
-            return Ok(());
-        };
-
-        if let Some(id) = id {
-            info!(
-                "About to upload logs `{name}.log.zip` for ID `{id}` to URL `{logs_upload_url}`..."
-            );
-        } else {
-            info!("About to uploads logs `{name}` to URL `{logs_upload_url}`...");
-        }
-
-        let client = reqwest::Client::new();
-
-        let mut builder = if let Some(id) = id {
-            client.post(&self.load_url).query(&[("id", id)])
-        } else {
-            client.post(&self.load_url)
-        };
-
-        builder = builder.header(
-            "Content-Disposition",
-            format!("attachment; filename=\"{name}.log.zip\""),
-        );
-
-        if let Some(auth) = self.auth.as_deref() {
-            builder = builder.header("Authorization", auth);
-        }
-
-        // TODO
-        //builder = builder.body(Body::new(read));
-
-        builder
-            .send()
-            .await
-            .context("Request failed")?
-            .error_for_status()
-            .context("Request returned an error status")?;
-
-        info!("Logs `{name}.log.zip` uploaded");
-
-        Ok(())
     }
 }

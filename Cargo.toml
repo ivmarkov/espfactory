@@ -56,3 +56,4 @@ aws-sdk-s3 = { version = "1.65", optional = true }
 tempfile = "3"
 async-compat = { version = "0.2", optional = true } # Because the AWS SDK uses tokio
 clap = { version = "4", optional = true, features = ["derive"] }
+url = { version = "2.5", features = ["serde"] }

@@ -18,11 +18,13 @@ pub use logger::LOGGER;
 
 extern crate alloc;
 
+pub mod loader;
+pub mod uploader;
+
 mod bundle;
 mod efuse;
 mod flash;
 mod input;
-pub mod loader;
 mod logger;
 mod model;
 mod task;
@@ -125,10 +127,23 @@ pub enum BundleIdentification {
 /// # Arguments
 /// - `conf` - The configuration of the factory
 /// - `bundle_dir` - The directory where a loaded bundle is temporarily stored for processing
-/// - `loader` - The loader used to load the bundle
-pub async fn run<T>(conf: &Config, bundle_dir: &Path, bundle_loader: T) -> anyhow::Result<()>
+/// - `bundle_base_loader` - An optional loader used to load the base bundle; the base bundle (if used)
+///   usually contains the device-independent payloads like the bootloader, the partition image
+///   and the factory app image
+/// - `bundle_loader` - The loader used to load the bundle; in case `bundle_base_loader` is used, this
+///   loader is used to load the device-specific payloads like the NVS partitions. The two bundles are then merged
+/// - `bundle_logs_uploader` - The uploader used to upload the logs from the device provisioning to the server
+pub async fn run<B, L, U>(
+    conf: &Config,
+    bundle_dir: &Path,
+    bundle_base_loader: Option<B>,
+    bundle_loader: L,
+    bundle_logs_uploader: U,
+) -> anyhow::Result<()>
 where
-    T: loader::BundleLoader,
+    B: loader::BundleLoader,
+    L: loader::BundleLoader,
+    U: uploader::BundleLogsUploader,
 {
     let mut terminal = ratatui::init();
 
@@ -143,7 +158,15 @@ where
 
     let result = select(
         View::new(&model, &mut terminal).run(),
-        Task::new(model.clone(), conf, bundle_dir, bundle_loader).run(&Input::new(&model)),
+        Task::new(
+            model.clone(),
+            conf,
+            bundle_dir,
+            bundle_base_loader,
+            bundle_loader,
+            bundle_logs_uploader,
+        )
+        .run(&Input::new(&model)),
     )
     .coalesce()
     .await;

@@ -233,7 +233,7 @@ pub mod file {
         Ok(log)
     }
 
-    pub fn finish<'i, I, S>(mut log: LogFile, summary: I) -> anyhow::Result<impl Read>
+    pub fn finish<'i, I, S>(mut log: LogFile, summary: I) -> anyhow::Result<impl Read + Seek>
     where
         I: IntoIterator<Item = &'i (S, S)>,
         S: AsRef<str> + 'i,

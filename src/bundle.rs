@@ -546,6 +546,8 @@ extra_1,  data, 0x06,            ,   20K,
             });
         }
 
+        self.name = format!("{}+{}", self.name, other.name);
+
         Ok(())
     }
 
