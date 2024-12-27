@@ -530,8 +530,8 @@ extra_1,  data, 0x06,            ,   20K,
             let name = mapping
                 .partition
                 .as_ref()
-                .map(|partition| partition.name().to_string())
-                .unwrap_or(mapping.image.as_ref().unwrap().name.clone());
+                .map(|partition| partition.name())
+                .unwrap_or_else(|| mapping.image.as_ref().unwrap().name.clone());
 
             if let Entry::Occupied(entry) = other_images.entry(name.clone()) {
                 if mapping.image.is_none() || overwrite {
