@@ -22,8 +22,10 @@ A Rust alternative to a custom-made Python or shell script driving the ESP provi
   -  Linux + gLibc X86_64
   -  Linux + gLibc ARM64 (rPI Ubuntu or RaspOS)
   -  Linux + gLibc ARM32
-- OOTB bundle loaders for a [directory](src/loader/dir.rs) (could also be NFS or something mounted with FUSE), [HTTP(S)](src.loader.http.rs) or [S3](src/loader/s3.rs)
 - [Pluggable bundle loaders](src/loader.rs)
+- [Pluggable bundle provisioning logs uploaders](src/uploader.rs)
+- OOTB bundle loaders for a [directory](src/loader/dir.rs) (could also be NFS or something mounted with FUSE), [HTTP(S)](src/loader/http.rs) or [S3](src/loader/s3.rs)
+- OOTB bundle provisioning logs uploaders for a [directory](src/uploader/dir.rs) (could also be NFS or something mounted with FUSE), [HTTP(S)](src/uploader/http.rs) or [S3](src/uploader/s3.rs)
 
 ## How to use?
 
