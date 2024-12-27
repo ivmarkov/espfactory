@@ -196,7 +196,7 @@ impl Widget for &Provision {
                 Constraint::Min((self.bundle.parts_mapping.len() + 1) as _),
                 Constraint::Min(1),
                 Constraint::Min(1),
-                Constraint::Min(3),
+                Constraint::Min((self.bundle.efuse_mapping.len() + 1) as _),
                 Constraint::Percentage(100),
             ],
         )
@@ -334,16 +334,18 @@ impl Widget for &Provision {
                                 purpose.clone().into()
                             }
                         },
-                        match &mapping.efuse {
-                            Efuse::Param { value, .. } => format!("0x{:08x}", value).into(),
+                        Text::raw(match &mapping.efuse {
+                            Efuse::Param { value, .. } => format!("0x{:08x}", value),
                             Efuse::Key {
                                 key_value: value, ..
                             }
                             | Efuse::KeyDigest {
                                 digest_value: value,
                                 ..
-                            } => format!("({}B)", value.len()).into(),
-                        },
+                            } => format!("({}B)", value.len()),
+                        })
+                        .right_aligned()
+                        .into(),
                         Text::raw(Provision::status_string(Some(mapping.status)))
                             .right_aligned()
                             .into(),
@@ -353,10 +355,10 @@ impl Widget for &Provision {
                 }),
                 vec![
                     Constraint::Length(1),
-                    Constraint::Percentage(40),
+                    Constraint::Min(20),
                     Constraint::Length(7),
-                    Constraint::Percentage(30),
-                    Constraint::Percentage(30),
+                    Constraint::Min(20),
+                    Constraint::Min(20),
                     Constraint::Length(11),
                 ],
             )
@@ -371,7 +373,7 @@ impl Widget for &Provision {
                 ])
                 .gray(),
             )
-            .render(layout[1], buf);
+            .render(layout[4], buf);
         }
     }
 }
