@@ -31,17 +31,14 @@ pub struct EfuseValue {
 ///
 /// # Returns
 /// A map of eFuse values by name
-pub fn summary<'a, I>(
-    tools: &esptools::Tools,
-    values: I,
-) -> anyhow::Result<HashMap<String, EfuseValue>>
+pub fn summary<'a, I>(values: I) -> anyhow::Result<HashMap<String, EfuseValue>>
 where
     I: Iterator<Item = &'a str>,
 {
     let tempfile =
         tempfile::NamedTempFile::new().context("Creation of eFuse temp out file failed")?;
 
-    let mut command = Command::new(tools.tool_path(esptools::Tool::EspEfuse));
+    let mut command = Command::new(esptools::Tool::EspEfuse.mount()?.path());
 
     command
         .arg("summary")
@@ -79,11 +76,11 @@ where
     Ok(summary)
 }
 
-pub fn burn_efuses<'a, I>(tools: &esptools::Tools, values: I) -> anyhow::Result<String>
+pub fn burn_efuses<'a, I>(values: I) -> anyhow::Result<String>
 where
     I: Iterator<Item = (&'a str, u32)>,
 {
-    let mut command = Command::new(tools.tool_path(esptools::Tool::EspEfuse));
+    let mut command = Command::new(esptools::Tool::EspEfuse.mount()?.path());
 
     command.arg("burn_efuse");
 
@@ -92,32 +89,28 @@ where
         command.arg(value.to_string());
     }
 
-    burn_exec(tools, "burn_efuse", &mut command)
+    burn_exec("burn_efuse", &mut command)
 }
 
-pub fn burn_keys<'a, I>(tools: &esptools::Tools, values: I) -> anyhow::Result<String>
+pub fn burn_keys<'a, I>(values: I) -> anyhow::Result<String>
 where
     I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
 {
-    burn_keys_or_digests(tools, "burn_key", values)
+    burn_keys_or_digests("burn_key", values)
 }
 
-pub fn burn_key_digests<'a, I>(tools: &esptools::Tools, values: I) -> anyhow::Result<String>
+pub fn burn_key_digests<'a, I>(values: I) -> anyhow::Result<String>
 where
     I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
 {
-    burn_keys_or_digests(tools, "burn_key_digest", values)
+    burn_keys_or_digests("burn_key_digest", values)
 }
 
-fn burn_keys_or_digests<'a, I>(
-    tools: &esptools::Tools,
-    cmd: &str,
-    values: I,
-) -> anyhow::Result<String>
+fn burn_keys_or_digests<'a, I>(cmd: &str, values: I) -> anyhow::Result<String>
 where
     I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
 {
-    let mut command = Command::new(tools.tool_path(esptools::Tool::EspEfuse));
+    let mut command = Command::new(esptools::Tool::EspEfuse.mount()?.path());
 
     command.arg(cmd);
 
@@ -140,14 +133,10 @@ where
         command.arg(purpose);
     }
 
-    burn_exec(tools, cmd, &mut command)
+    burn_exec(cmd, &mut command)
 }
 
-fn burn_exec(
-    _tools: &esptools::Tools,
-    command_desc: &str,
-    command: &mut Command,
-) -> anyhow::Result<String> {
+fn burn_exec(command_desc: &str, command: &mut Command) -> anyhow::Result<String> {
     let output = command
         .output()
         .context("Executing the eFuse tool with command `{command_desc}` failed")?;

@@ -437,9 +437,7 @@ where
         info!("About to read Chip IDs from eFuse");
 
         let efuse_values = unblock("efuse-summary", || {
-            let tools = esptools::Tools::mount().context("Mounting esptools failed")?;
-
-            let efuse_values = efuse::summary(&tools, EFUSE_VALUES.iter().copied())?;
+            let efuse_values = efuse::summary(EFUSE_VALUES.iter().copied())?;
 
             let efuse_values = efuse_values
                 .iter()
@@ -563,12 +561,7 @@ where
 
         let model = self.model.clone();
 
-        unblock("efuse-burn", move || {
-            let tools = esptools::Tools::mount().context("Mounting esptools failed")?;
-
-            Self::burn(&model, &tools)
-        })
-        .await?;
+        unblock("efuse-burn", move || Self::burn(&model)).await?;
 
         info!("Burn complete");
 
@@ -726,7 +719,7 @@ where
         )
     }
 
-    fn burn(model: &Model, tools: &esptools::Tools) -> anyhow::Result<String> {
+    fn burn(model: &Model) -> anyhow::Result<String> {
         let mut output = String::new();
 
         model.modify(|state| {
@@ -764,13 +757,11 @@ where
         });
 
         if !digests.is_empty() {
-            let digests_output = efuse::burn_key_digests(
-                tools,
-                digests.iter().map(|(block, digest, purpose)| {
+            let digests_output =
+                efuse::burn_key_digests(digests.iter().map(|(block, digest, purpose)| {
                     (block.as_str(), digest.as_slice(), purpose.as_str())
-                }),
-            )
-            .context("Burning key digests failed")?;
+                }))
+                .context("Burning key digests failed")?;
 
             model.modify(|state| {
                 let efuses = &mut state.provision_mut().bundle.efuse_mapping;
@@ -812,13 +803,11 @@ where
         });
 
         if !keys.is_empty() {
-            let keys_output = efuse::burn_keys(
-                tools,
-                keys.iter().map(|(block, key, purpose)| {
+            let keys_output =
+                efuse::burn_keys(keys.iter().map(|(block, key, purpose)| {
                     (block.as_str(), key.as_slice(), purpose.as_str())
-                }),
-            )
-            .context("Burning keys failed")?;
+                }))
+                .context("Burning keys failed")?;
 
             model.modify(|state| {
                 let efuses = &mut state.provision_mut().bundle.efuse_mapping;
@@ -855,11 +844,9 @@ where
         });
 
         if !params.is_empty() {
-            let params_output = efuse::burn_efuses(
-                tools,
-                params.iter().map(|(name, value)| (name.as_str(), *value)),
-            )
-            .context("Burning params failed")?;
+            let params_output =
+                efuse::burn_efuses(params.iter().map(|(name, value)| (name.as_str(), *value)))
+                    .context("Burning params failed")?;
 
             model.modify(|state| {
                 let efuses = &mut state.provision_mut().bundle.efuse_mapping;
