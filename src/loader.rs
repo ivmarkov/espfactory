@@ -126,6 +126,8 @@ impl Loader {
             "http" | "https" => Ok(Self::Http(http::HttpLoader::new(
                 url.as_str().to_string(),
                 None,
+                false,
+                true,
                 None,
             ))),
             #[cfg(feature = "s3")]
