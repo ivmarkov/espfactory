@@ -60,7 +60,7 @@ impl Bundle {
     /// The prefix of the image files when loaded from a ZIP bundle (.bundle)
     const IMAGES_PREFIX: &str = "images/";
     /// The prefix of the efuse files when loaded from a ZIP bundle (.bundle)
-    const EFUSES_PREFIX: &str = "efuse/";
+    const EFUSES_PREFIX: &str = "efuses/";
 
     /// The size of the partition table in Espressif chips
     const PART_TABLE_SIZE: usize = Self::PAGE_SIZE;
