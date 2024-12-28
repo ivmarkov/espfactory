@@ -126,7 +126,9 @@ fn run() -> anyhow::Result<()> {
             url: None,
             logs_upload_urls: Vec::new(),
             config: espfactory::Config {
-                dry_run: true,
+                flash_dry_run: false,
+                flash_speed: Some(1500000),
+                efuse_dry_run: true,
                 bundle_identification: BundleIdentification::BoxId,
                 test_jig_id_readout: true,
                 pcb_id_readout: true,

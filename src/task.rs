@@ -436,8 +436,17 @@ where
 
         info!("About to read Chip IDs from eFuse");
 
-        let efuse_values = unblock("efuse-summary", || {
-            let efuse_values = efuse::summary(EFUSE_VALUES.iter().copied())?;
+        let efuse_chip: Option<String> = None; // TODO
+        let efuse_port = self.conf.port.clone();
+        let efuse_baud = self.conf.efuse_speed.map(|speed| speed.to_string());
+
+        let efuse_values = unblock("efuse-summary", move || {
+            let efuse_values = efuse::summary(
+                efuse_chip.as_deref(),
+                efuse_port.as_deref(),
+                efuse_baud.as_deref(),
+                EFUSE_VALUES.iter().copied(),
+            )?;
 
             let efuse_values = efuse_values
                 .iter()
@@ -540,7 +549,7 @@ where
         let flash_port = self.conf.port.clone();
         let flash_speed = self.conf.flash_speed;
         let flash_model = self.model.clone();
-        let dry_run = self.conf.dry_run;
+        let flash_dry_run = self.conf.flash_dry_run;
 
         unblock("flash", move || {
             flash::flash(
@@ -549,7 +558,7 @@ where
                 flash_speed,
                 flash_size,
                 flash_data,
-                dry_run,
+                flash_dry_run,
                 FlashProgress::new(flash_model),
             )
         })
@@ -561,7 +570,21 @@ where
 
         let model = self.model.clone();
 
-        unblock("efuse-burn", move || Self::burn(&model)).await?;
+        let efuse_chip: Option<String> = None; // TODO
+        let efuse_port = self.conf.port.clone();
+        let efuse_baud = self.conf.efuse_speed.map(|speed| speed.to_string());
+        let efuse_dry_run = self.conf.efuse_dry_run;
+
+        unblock("efuse-burn", move || {
+            Self::burn(
+                &model,
+                efuse_chip.as_deref(),
+                efuse_port.as_deref(),
+                efuse_baud.as_deref(),
+                efuse_dry_run,
+            )
+        })
+        .await?;
 
         info!("Burn complete");
 
@@ -719,7 +742,13 @@ where
         )
     }
 
-    fn burn(model: &Model) -> anyhow::Result<String> {
+    fn burn(
+        model: &Model,
+        chip: Option<&str>,
+        port: Option<&str>,
+        baud: Option<&str>,
+        dry_run: bool,
+    ) -> anyhow::Result<String> {
         let mut output = String::new();
 
         model.modify(|state| {
@@ -757,11 +786,16 @@ where
         });
 
         if !digests.is_empty() {
-            let digests_output =
-                efuse::burn_key_digests(digests.iter().map(|(block, digest, purpose)| {
+            let digests_output = efuse::burn_key_digests(
+                chip,
+                port,
+                baud,
+                dry_run,
+                digests.iter().map(|(block, digest, purpose)| {
                     (block.as_str(), digest.as_slice(), purpose.as_str())
-                }))
-                .context("Burning key digests failed")?;
+                }),
+            )
+            .context("Burning key digests failed")?;
 
             model.modify(|state| {
                 let efuses = &mut state.provision_mut().bundle.efuse_mapping;
@@ -803,11 +837,16 @@ where
         });
 
         if !keys.is_empty() {
-            let keys_output =
-                efuse::burn_keys(keys.iter().map(|(block, key, purpose)| {
+            let keys_output = efuse::burn_keys(
+                chip,
+                port,
+                baud,
+                dry_run,
+                keys.iter().map(|(block, key, purpose)| {
                     (block.as_str(), key.as_slice(), purpose.as_str())
-                }))
-                .context("Burning keys failed")?;
+                }),
+            )
+            .context("Burning keys failed")?;
 
             model.modify(|state| {
                 let efuses = &mut state.provision_mut().bundle.efuse_mapping;
@@ -844,9 +883,14 @@ where
         });
 
         if !params.is_empty() {
-            let params_output =
-                efuse::burn_efuses(params.iter().map(|(name, value)| (name.as_str(), *value)))
-                    .context("Burning params failed")?;
+            let params_output = efuse::burn_efuses(
+                chip,
+                port,
+                baud,
+                dry_run,
+                params.iter().map(|(name, value)| (name.as_str(), *value)),
+            )
+            .context("Burning params failed")?;
 
             model.modify(|state| {
                 let efuses = &mut state.provision_mut().bundle.efuse_mapping;

@@ -34,9 +34,12 @@ mod view;
 /// The configuration of the factory
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Config {
-    /// Do not flash or eFuse, just print the commands that would be executed
+    /// Do not flash, just print the commands that would be executed
     #[serde(default)]
-    pub dry_run: bool,
+    pub flash_dry_run: bool,
+    /// Do not eFuse, just print the commands that would be executed
+    #[serde(default)]
+    pub efuse_dry_run: bool,
     /// The serial port to use for communication with the device
     ///
     /// If not provided, the first available port where an ESP chip is
@@ -48,6 +51,11 @@ pub struct Config {
     /// If not provided, the default speed will be used
     #[serde(default)]
     pub flash_speed: Option<u32>,
+    /// The eFuse speed to use for burning the device eFuse
+    ///
+    /// If not provided, the default speed will be used
+    #[serde(default)]
+    pub efuse_speed: Option<u32>,
     /// The method used to identify the bundle to be loaded
     #[serde(default)]
     pub bundle_identification: BundleIdentification,
@@ -86,9 +94,11 @@ impl Config {
     /// Create a new configuration with default values
     pub const fn new() -> Self {
         Self {
-            dry_run: false,
+            flash_dry_run: false,
+            efuse_dry_run: true,
             port: None,
             flash_speed: None,
+            efuse_speed: None,
             bundle_identification: BundleIdentification::None,
             test_jig_id_readout: false,
             pcb_id_readout: false,

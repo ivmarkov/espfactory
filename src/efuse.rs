@@ -31,7 +31,12 @@ pub struct EfuseValue {
 ///
 /// # Returns
 /// A map of eFuse values by name
-pub fn summary<'a, I>(values: I) -> anyhow::Result<HashMap<String, EfuseValue>>
+pub fn summary<'a, I>(
+    chip: Option<&str>,
+    port: Option<&str>,
+    baud: Option<&str>,
+    values: I,
+) -> anyhow::Result<HashMap<String, EfuseValue>>
 where
     I: Iterator<Item = &'a str>,
 {
@@ -39,6 +44,18 @@ where
         tempfile::NamedTempFile::new().context("Creation of eFuse temp out file failed")?;
 
     let mut command = Command::new(esptools::Tool::EspEfuse.mount()?.path());
+
+    if let Some(chip) = chip {
+        command.arg("--chip").arg(chip);
+    }
+
+    if let Some(port) = port {
+        command.arg("--port").arg(port);
+    }
+
+    if let Some(baud) = baud {
+        command.arg("--baud").arg(baud);
+    }
 
     command
         .arg("summary")
@@ -76,11 +93,29 @@ where
     Ok(summary)
 }
 
-pub fn burn_efuses<'a, I>(values: I) -> anyhow::Result<String>
+pub fn burn_efuses<'a, I>(
+    chip: Option<&str>,
+    port: Option<&str>,
+    baud: Option<&str>,
+    dry_run: bool,
+    values: I,
+) -> anyhow::Result<String>
 where
     I: Iterator<Item = (&'a str, u32)>,
 {
     let mut command = Command::new(esptools::Tool::EspEfuse.mount()?.path());
+
+    if let Some(chip) = chip {
+        command.arg("--chip").arg(chip);
+    }
+
+    if let Some(port) = port {
+        command.arg("--port").arg(port);
+    }
+
+    if let Some(baud) = baud {
+        command.arg("--baud").arg(baud);
+    }
 
     command.arg("burn_efuse");
 
@@ -89,28 +124,59 @@ where
         command.arg(value.to_string());
     }
 
-    burn_exec("burn_efuse", &mut command)
+    burn_exec("burn_efuse", dry_run, &mut command)
 }
 
-pub fn burn_keys<'a, I>(values: I) -> anyhow::Result<String>
+pub fn burn_keys<'a, I>(
+    chip: Option<&str>,
+    port: Option<&str>,
+    baud: Option<&str>,
+    dry_run: bool,
+    values: I,
+) -> anyhow::Result<String>
 where
     I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
 {
-    burn_keys_or_digests("burn_key", values)
+    burn_keys_or_digests("burn_key", chip, port, baud, dry_run, values)
 }
 
-pub fn burn_key_digests<'a, I>(values: I) -> anyhow::Result<String>
+pub fn burn_key_digests<'a, I>(
+    chip: Option<&str>,
+    port: Option<&str>,
+    baud: Option<&str>,
+    dry_run: bool,
+    values: I,
+) -> anyhow::Result<String>
 where
     I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
 {
-    burn_keys_or_digests("burn_key_digest", values)
+    burn_keys_or_digests("burn_key_digest", chip, port, baud, dry_run, values)
 }
 
-fn burn_keys_or_digests<'a, I>(cmd: &str, values: I) -> anyhow::Result<String>
+fn burn_keys_or_digests<'a, I>(
+    cmd: &str,
+    chip: Option<&str>,
+    port: Option<&str>,
+    baud: Option<&str>,
+    dry_run: bool,
+    values: I,
+) -> anyhow::Result<String>
 where
     I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
 {
     let mut command = Command::new(esptools::Tool::EspEfuse.mount()?.path());
+
+    if let Some(chip) = chip {
+        command.arg("--chip").arg(chip);
+    }
+
+    if let Some(port) = port {
+        command.arg("--port").arg(port);
+    }
+
+    if let Some(baud) = baud {
+        command.arg("--baud").arg(baud);
+    }
 
     command.arg(cmd);
 
@@ -133,10 +199,14 @@ where
         command.arg(purpose);
     }
 
-    burn_exec(cmd, &mut command)
+    burn_exec(cmd, dry_run, &mut command)
 }
 
-fn burn_exec(command_desc: &str, command: &mut Command) -> anyhow::Result<String> {
+fn burn_exec(command_desc: &str, dry_run: bool, command: &mut Command) -> anyhow::Result<String> {
+    if dry_run {
+        return Ok("".to_string());
+    }
+
     let output = command
         .output()
         .context("Executing the eFuse tool with command `{command_desc}` failed")?;

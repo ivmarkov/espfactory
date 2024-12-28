@@ -60,6 +60,7 @@ impl LogsUploader {
             "http" | "https" => Ok(Self::Http(http::HttpLogsUploader::new(
                 url.as_str().to_string(),
                 None,
+                true,
             ))),
             #[cfg(feature = "s3")]
             "s3" => {

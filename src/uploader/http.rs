@@ -16,6 +16,7 @@ use super::BundleLogsUploader;
 #[derive(Debug, Clone)]
 pub struct HttpLogsUploader {
     logs_upload_url: String,
+    name_as_log_file: bool,
     auth: Option<String>,
 }
 
@@ -25,10 +26,18 @@ impl HttpLogsUploader {
     /// # Arguments
     /// - `logs_upload_url`: The URL of the server to upload the logs to
     /// - `auth`: An optional authorization token to use when uploading the logs
-    pub const fn new(logs_upload_url: String, auth: Option<String>) -> Self {
+    /// - `name_as_log_file`: A flag indicating whether to upload the bundle logs with:
+    ///   - `true`:  A simple parameter-less POST request of the form `<url>/<bundle-name>.log.zip`
+    ///   - `false`: With a POST request with a parameter `<url>?id=<bundle-id>`
+    pub const fn new(
+        logs_upload_url: String,
+        auth: Option<String>,
+        name_as_log_file: bool,
+    ) -> Self {
         Self {
             logs_upload_url,
             auth,
+            name_as_log_file,
         }
     }
 }
@@ -57,7 +66,15 @@ impl BundleLogsUploader for HttpLogsUploader {
 
         let client = reqwest::Client::new();
 
-        let mut builder = if let Some(id) = id {
+        let mut builder = if self.name_as_log_file {
+            // When `name_as_log_file` is `true`, we dictate the name of the uploaded log file
+            let url = format!(
+                "{}/{name}.log.zip",
+                self.logs_upload_url.trim_end_matches('/')
+            );
+
+            client.post(&url)
+        } else if let Some(id) = id {
             client.post(&self.logs_upload_url).query(&[("id", id)])
         } else {
             client.post(&self.logs_upload_url)

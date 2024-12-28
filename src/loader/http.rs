@@ -82,7 +82,7 @@ impl BundleLoader for HttpLoader {
 
         let mut builder = if let Some(id) = id {
             if self.id_as_bundle_file {
-                // When `get_as_file` is `true`, we only fetch `.bundle` bundles for now (though we can try out .bin and elf too)
+                // When `id_as_bundle_file` is `true`, we only fetch `.bundle` bundles for now (though we can try out .bin and elf too)
                 let url = format!("{}/{id}.bundle", self.load_url.trim_end_matches('/'));
 
                 if self.use_post {
