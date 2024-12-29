@@ -26,7 +26,7 @@ pub struct S3LogsUploader {
 }
 
 impl S3LogsUploader {
-    /// Creates a new `S3Loader` instance
+    /// Creates a new `S3LogsUploader` instance
     ///
     /// # Arguments
     /// - `config` - The optional AWS SDK configuration
