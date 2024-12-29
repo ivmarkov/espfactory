@@ -239,7 +239,13 @@ impl Widget for &Provision {
                         ))
                         .right_aligned()
                         .into(),
-                        "-".into(),
+                        if partition.encrypted() {
+                            "Encrypted"
+                        } else {
+                            "-"
+                        }
+                        .to_string()
+                        .into(),
                         Text::raw(
                             mapping
                                 .image
