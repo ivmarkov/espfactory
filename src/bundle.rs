@@ -635,10 +635,12 @@ extra_1,  data, 0x06,            ,   20K,
         let mut modified = false;
 
         for mapping in &mut self.parts_mapping {
-            if let Some(image) = mapping.image.as_mut() {
-                if image.status != status {
-                    image.status = status;
-                    modified = true;
+            if mapping.partition.is_some() {
+                if let Some(image) = mapping.image.as_mut() {
+                    if image.status != status {
+                        image.status = status;
+                        modified = true;
+                    }
                 }
             }
         }
@@ -829,7 +831,10 @@ pub struct PartitionMapping {
 impl PartitionMapping {
     /// Get the status of the image
     pub fn status(&self) -> Option<ProvisioningStatus> {
-        self.image.as_ref().map(|image| image.status)
+        self.partition
+            .is_some()
+            .then(|| self.image.as_ref().map(|image| image.status))
+            .flatten()
     }
 }
 
