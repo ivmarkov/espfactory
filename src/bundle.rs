@@ -495,7 +495,7 @@ extra_1,  data, 0x06,            ,   20K,
 
         info!("Bundle {name} prepared");
 
-        Ok(Self {
+        let this = Self {
             name,
             params,
             parts_mapping,
@@ -505,7 +505,11 @@ extra_1,  data, 0x06,            ,   20K,
                     status: ProvisioningStatus::NotStarted,
                 })
                 .collect(),
-        })
+        };
+
+        this.check_part_sizes()?;
+
+        Ok(this)
     }
 
     /// Add the images and efuses of another bundle into the current bundle
@@ -575,6 +579,8 @@ extra_1,  data, 0x06,            ,   20K,
 
         self.name = format!("{}+{}", self.name, other.name);
 
+        self.check_part_sizes()?;
+
         Ok(())
     }
 
@@ -641,7 +647,7 @@ extra_1,  data, 0x06,            ,   20K,
     }
 
     /// Set the status of the image for the given partition to the given status
-    pub fn set_status(&mut self, part_offset: u32, status: ProvisioningStatus) -> bool {
+    pub(crate) fn set_status(&mut self, part_offset: u32, status: ProvisioningStatus) -> bool {
         let mut modified = false;
 
         for mapping in &mut self.parts_mapping {
@@ -658,6 +664,28 @@ extra_1,  data, 0x06,            ,   20K,
         }
 
         modified
+    }
+
+    fn check_part_sizes(&self) -> anyhow::Result<()> {
+        for mapping in &self.parts_mapping {
+            if let Some(partition) = mapping.partition.as_ref() {
+                if let Some(image) = mapping.image.as_ref() {
+                    let part_len = partition.size() as usize;
+
+                    if image.data.len() > part_len {
+                        anyhow::bail!(
+                            "Image `{}` is too large for partition `{}` ({}B > {}B)",
+                            image.name,
+                            partition.name(),
+                            image.data.len(),
+                            part_len
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
