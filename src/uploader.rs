@@ -95,7 +95,7 @@ impl BundleLogsUploader for LogsUploader {
 /// A logs uploader that uploads the logs to multiple destinations
 pub struct MultilogsUploader<'a, T>(pub &'a mut [T]);
 
-impl<'a, T> BundleLogsUploader for MultilogsUploader<'a, T>
+impl<T> BundleLogsUploader for MultilogsUploader<'_, T>
 where
     T: BundleLogsUploader,
 {

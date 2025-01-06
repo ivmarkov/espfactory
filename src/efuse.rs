@@ -207,9 +207,9 @@ fn burn_exec(command_desc: &str, dry_run: bool, command: &mut Command) -> anyhow
         return Ok("".to_string());
     }
 
-    let output = command
-        .output()
-        .context("Executing the eFuse tool with command `{command_desc}` failed")?;
+    let output = command.output().with_context(|| {
+        format!("Executing the eFuse tool with command `{command_desc}` failed")
+    })?;
 
     if !output.status.success() {
         anyhow::bail!(
@@ -220,6 +220,6 @@ fn burn_exec(command_desc: &str, dry_run: bool, command: &mut Command) -> anyhow
     }
 
     core::str::from_utf8(&output.stdout)
-        .context("Parsing the eFuse tool `{command_desc}` command output failed")
+        .with_context(|| format!("Parsing the eFuse tool `{command_desc}` command output failed"))
         .map(str::to_string)
 }

@@ -92,10 +92,12 @@ impl BundleLogsUploader for HttpLogsUploader {
         read.seek(io::SeekFrom::Start(0))
             .context("Saving the bundle log failed")?;
 
-        // TODO
-        //builder = builder.body(Body::new(read));
+        // A bit of a hack as it reads the whole ZIP in memory
+        let mut data = Vec::new();
+        read.read_to_end(&mut data)?;
 
         builder
+            .body(data)
             .send()
             .await
             .context("Request failed")?
