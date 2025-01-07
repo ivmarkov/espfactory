@@ -117,6 +117,8 @@ where
         command.arg("--baud").arg(baud);
     }
 
+    command.arg("--do-not-confirm");
+
     command.arg("burn_efuse");
 
     for (key, value) in values {
@@ -177,6 +179,8 @@ where
     if let Some(baud) = baud {
         command.arg("--baud").arg(baud);
     }
+
+    command.arg("--do-not-confirm");
 
     command.arg(cmd);
 
