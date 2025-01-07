@@ -38,7 +38,7 @@ pub struct Config {
     #[serde(default)]
     pub flash_dry_run: bool,
     /// Do not eFuse, just print the commands that would be executed
-    #[serde(default)]
+    #[serde(default = "default_bool::<true>")]
     pub efuse_dry_run: bool,
     /// The serial port to use for communication with the device
     ///
@@ -87,6 +87,7 @@ pub struct Config {
     pub supply_default_bootloader: bool,
     /// When a base bundle is used: whether to overwrite the base bundle images with the non-base ones
     /// during the bundles' merge operation
+    #[serde(default)]
     pub overwrite_on_merge: bool,
 }
 

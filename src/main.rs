@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
+use anyhow::Context;
+
 use async_compat::CompatExt;
+
 use clap::{ColorChoice, Parser, ValueEnum};
 
 use espfactory::loader::Loader;
 use espfactory::uploader::{LogsUploader, MultilogsUploader};
-use espfactory::{self, BundleIdentification, LOGGER};
+use espfactory::{self, LOGGER};
 
 use log::LevelFilter;
 
@@ -81,8 +84,10 @@ pub struct Config {
     /// The source of bundles
     pub url: Option<Url>,
     /// The destinations where to upload logs
+    #[serde(default)]
     pub logs_upload_urls: Vec<Url>,
     /// The configuration of the factory
+    #[serde(default)]
     pub config: espfactory::Config,
 }
 
@@ -115,27 +120,24 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let args = Cli::parse();
 
-    log::set_logger(&LOGGER).unwrap();
     log::set_max_level(LevelFilter::Debug);
 
     let conf = if let Some(conf) = args.conf {
-        toml::from_str(&std::fs::read_to_string(conf)?)?
-    } else {
-        Config {
-            base_url: None,
-            url: None,
-            logs_upload_urls: Vec::new(),
-            config: espfactory::Config {
-                flash_dry_run: false,
-                flash_speed: Some(1500000),
-                efuse_dry_run: true,
-                bundle_identification: BundleIdentification::BoxId,
-                test_jig_id_readout: true,
-                pcb_id_readout: true,
-                box_id_readout: true,
-                ..Default::default()
-            },
+        println!("Loading configuration from `{}`", conf.display());
+        toml::from_str(&std::fs::read_to_string(conf)?).context("Invalid configuiration format")?
+    } else if let Ok(current_exe) = std::env::current_exe() {
+        let conf = current_exe.with_file_name("espfactory.toml");
+        if conf.exists() && conf.is_file() {
+            println!("Loading configuration from `{}`", conf.display());
+            toml::from_str(&std::fs::read_to_string(conf)?)
+                .context("Invalid configuiration format")?
+        } else {
+            println!("Using default configuration");
+            Config::new()
         }
+    } else {
+        println!("Using default configuration");
+        Config::new()
     };
 
     let base_loader_url = args.base_url.or_else(|| conf.base_url.clone());
@@ -171,6 +173,8 @@ fn run() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Cannot mount project directories"))?;
 
     let bundle_dir = &project_dirs.cache_dir().join("bundle");
+
+    log::set_logger(&LOGGER).unwrap();
 
     LOGGER.lock(|logger| logger.set_level(args.verbosity.log_level()));
 
