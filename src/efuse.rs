@@ -185,12 +185,16 @@ where
     for (key, value, purpose) in values {
         command.arg(key);
 
-        let mut temp_file =
-            tempfile::NamedTempFile::new().context("Creation of eFuse temp key file failed")?;
+        let mut temp_file = tempfile::NamedTempFile::new()
+            .context("Creation of eFuse temp key/digest file failed")?;
 
         temp_file
             .write_all(value)
-            .context("Writing eFuse temp key file failed")?;
+            .context("Writing eFuse temp key/digest file failed")?;
+
+        temp_file
+            .flush()
+            .context("Flushing eFuse temp key/digest file failed")?;
 
         command.arg(temp_file.path().to_string_lossy().into_owned());
 
