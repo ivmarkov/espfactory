@@ -76,9 +76,11 @@ pub fn elf2bin(elf_data: &[u8], chip: Chip) -> anyhow::Result<Vec<u8>> {
 /// - `flash_size` - the flash size to be used for flashing. If not provided, the default flash size (4MB) will be used
 /// - `flash_data` - the binary image data to be flashed
 /// - `progress` - the progress callbacks to be used during flashing
+#[allow(clippy::too_many_arguments)]
 pub fn flash<P>(
     port: Option<&str>,
     chip: Chip,
+    use_stub: bool,
     speed: Option<u32>,
     flash_size: Option<FlashSize>,
     flash_data: Vec<FlashData>,
@@ -88,7 +90,7 @@ pub fn flash<P>(
 where
     P: ProgressCallbacks + Send + Sync + 'static,
 {
-    let mut flasher = new(port, chip, speed)?;
+    let mut flasher = new(port, chip, use_stub, speed)?;
 
     if let Some(flash_size) = flash_size {
         flasher.set_flash_size(flash_size);
@@ -113,7 +115,12 @@ where
     Ok(())
 }
 
-fn new(port: Option<&str>, chip: Chip, speed: Option<u32>) -> anyhow::Result<Flasher> {
+fn new(
+    port: Option<&str>,
+    chip: Chip,
+    use_stub: bool,
+    speed: Option<u32>,
+) -> anyhow::Result<Flasher> {
     let port_info = get_serial_port_info(port)?;
 
     let serial_port = serialport::new(port_info.port_name, 112500)
@@ -142,7 +149,7 @@ fn new(port: Option<&str>, chip: Chip, speed: Option<u32>) -> anyhow::Result<Fla
         *Box::new(serial_port),
         port_info.clone(),
         speed,
-        true,
+        use_stub,
         true,
         false,
         Some(chip.to_flash_chip()),

@@ -46,6 +46,9 @@ pub struct Config {
     /// detected will be used
     #[serde(default)]
     pub port: Option<String>,
+    /// Do not use a stub when flashing
+    #[serde(default)]
+    pub flash_no_stub: bool,
     /// The flash speed to use for flashing the device
     ///
     /// If not provided, the default speed will be used
@@ -98,6 +101,7 @@ impl Config {
             flash_dry_run: false,
             efuse_dry_run: true,
             port: None,
+            flash_no_stub: false,
             flash_speed: None,
             efuse_speed: None,
             bundle_identification: BundleIdentification::None,

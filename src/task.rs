@@ -546,6 +546,7 @@ where
             flash_data.len()
         );
 
+        let flash_use_stub = !self.conf.flash_no_stub;
         let flash_port = self.conf.port.clone();
         let flash_speed = self.conf.flash_speed;
         let flash_model = self.model.clone();
@@ -555,6 +556,7 @@ where
             flash::flash(
                 flash_port.as_deref(),
                 chip,
+                flash_use_stub,
                 flash_speed,
                 flash_size,
                 flash_data,
