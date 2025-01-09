@@ -130,6 +130,7 @@ where
 }
 
 pub fn burn_keys<'a, I>(
+    protect_keys: bool,
     chip: Option<&str>,
     port: Option<&str>,
     baud: Option<&str>,
@@ -139,10 +140,11 @@ pub fn burn_keys<'a, I>(
 where
     I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
 {
-    burn_keys_or_digests("burn_key", chip, port, baud, dry_run, values)
+    burn_keys_or_digests(protect_keys, "burn_key", chip, port, baud, dry_run, values)
 }
 
 pub fn burn_key_digests<'a, I>(
+    protect_digests: bool,
     chip: Option<&str>,
     port: Option<&str>,
     baud: Option<&str>,
@@ -152,10 +154,19 @@ pub fn burn_key_digests<'a, I>(
 where
     I: Iterator<Item = (&'a str, &'a [u8], &'a str)>,
 {
-    burn_keys_or_digests("burn_key_digest", chip, port, baud, dry_run, values)
+    burn_keys_or_digests(
+        protect_digests,
+        "burn_key_digest",
+        chip,
+        port,
+        baud,
+        dry_run,
+        values,
+    )
 }
 
 fn burn_keys_or_digests<'a, I>(
+    protect_keys: bool,
     cmd: &str,
     chip: Option<&str>,
     port: Option<&str>,
@@ -180,6 +191,34 @@ where
         command.arg("--baud").arg(baud);
     }
 
+    // NOTE: VERY, VERY IMPORTANT
+    // As mentoned here:
+    // https://docs.espressif.com/projects/esp-idf/en/v5.4/esp32s3/security/security-features-enablement-workflows.html#enable-flash-encryption-and-secure-boot-v2-externally
+    // ... all keys and digests are actually protected by using two bit-fields in the eFuse block 0:
+    // WR_DIS (BLOCK0)                                    Disable programming of individual eFuses           = 25166593 R/W (0x01800301)
+    // RD_DIS (BLOCK0)                                    Disable reading from BlOCK4-10                     = 0 R/- (0b0000000)
+    //
+    // So by burning specifically a Secure Boot V2 digest first (which needs to be readable but NOT writable), we need burn
+    // a few its in `WR_DIS` and `RD_DIS` to write-protect it and (where the logic breaks) to make sure
+    // it remains readable.
+    // The last one (ensuring the key remains readable) is - unfortunately - implemented by write-protecting the RD_DIS
+    // bit-field **itself** (so that a hacker cannot read-protected the Secfure Boot signature, thus causing denial of service).
+    //
+    // Unfortunately, this means that we cannot read-protect a subsequent Flash Encryption key burn, as we cannot flip the
+    // corresponding bit in RD_DIS, as the RD_DIS bitfield itself is now write-protected.
+    //
+    // Therefore, the workaround here is just making sure we don't do anything with the RD_DIS and WR_DIS fields.
+    //
+    // The bootloader would fix these anyway, when configured properly.
+    //
+    // See also:
+    //https://github.com/espressif/esp-idf/issues/11888
+    if !protect_keys {
+        command.arg("--no-protect-key");
+    }
+
+    // ... or else we need to type "BURN" in the terminal which is impossible
+    // as the provisioning process is not interactive
     command.arg("--do-not-confirm");
 
     command.arg(cmd);

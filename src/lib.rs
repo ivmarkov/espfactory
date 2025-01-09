@@ -40,6 +40,12 @@ pub struct Config {
     /// Do not eFuse, just print the commands that would be executed
     #[serde(default = "default_bool::<true>")]
     pub efuse_dry_run: bool,
+    /// Whether to protect the keys to be burned in the eFuse
+    #[serde(default)]
+    pub efuse_protect_keys: bool,
+    /// Whether to protect the digests to be burned in the eFuse
+    #[serde(default)]
+    pub efuse_protect_digests: bool,
     /// The serial port to use for communication with the device
     ///
     /// If not provided, the first available port where an ESP chip is
@@ -100,6 +106,8 @@ impl Config {
         Self {
             flash_dry_run: false,
             efuse_dry_run: true,
+            efuse_protect_keys: false,
+            efuse_protect_digests: false,
             port: None,
             flash_no_stub: false,
             flash_speed: None,

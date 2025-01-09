@@ -572,6 +572,8 @@ where
 
         let model = self.model.clone();
 
+        let efuse_protect_keys = self.conf.efuse_protect_keys;
+        let efuse_protect_digests = self.conf.efuse_protect_digests;
         let efuse_chip: Option<String> = None; // TODO
         let efuse_port = self.conf.port.clone();
         let efuse_baud = self.conf.efuse_speed.map(|speed| speed.to_string());
@@ -580,6 +582,8 @@ where
         unblock("efuse-burn", move || {
             Self::burn(
                 &model,
+                efuse_protect_keys,
+                efuse_protect_digests,
                 efuse_chip.as_deref(),
                 efuse_port.as_deref(),
                 efuse_baud.as_deref(),
@@ -746,6 +750,8 @@ where
 
     fn burn(
         model: &Model,
+        protect_keys: bool,
+        protect_digests: bool,
         chip: Option<&str>,
         port: Option<&str>,
         baud: Option<&str>,
@@ -761,58 +767,7 @@ where
             }
         });
 
-        // Step 1: Burn key digests first
-
-        let mut digests = Vec::new();
-
-        model.access_mut(|state| {
-            let efuses = &mut state.provision_mut().bundle.efuse_mapping;
-
-            let mut changed = false;
-
-            for efuse in efuses {
-                if let Efuse::KeyDigest {
-                    block,
-                    digest_value,
-                    purpose,
-                } = &efuse.efuse
-                {
-                    digests.push((block.clone(), digest_value.clone(), purpose.clone()));
-                }
-
-                efuse.status = ProvisioningStatus::Pending;
-                changed = true;
-            }
-
-            changed
-        });
-
-        if !digests.is_empty() {
-            let digests_output = efuse::burn_key_digests(
-                chip,
-                port,
-                baud,
-                dry_run,
-                digests.iter().map(|(block, digest, purpose)| {
-                    (block.as_str(), digest.as_slice(), purpose.as_str())
-                }),
-            )
-            .context("Burning key digests failed")?;
-
-            model.modify(|state| {
-                let efuses = &mut state.provision_mut().bundle.efuse_mapping;
-
-                for efuse in efuses {
-                    if let Efuse::KeyDigest { .. } = &efuse.efuse {
-                        efuse.status = ProvisioningStatus::Done;
-                    }
-                }
-            });
-
-            write!(&mut output, "{digests_output}\n\n")?;
-        }
-
-        // Step 2: Burn keys next
+        // Step 1: Burn keys first
 
         let mut keys = Vec::new();
 
@@ -840,6 +795,7 @@ where
 
         if !keys.is_empty() {
             let keys_output = efuse::burn_keys(
+                protect_keys,
                 chip,
                 port,
                 baud,
@@ -861,6 +817,58 @@ where
             });
 
             write!(&mut output, "{keys_output}\n\n")?;
+        }
+
+        // Step 2: Burn key digests next (should be after keys, check the comment inside `efuse::burn_keys_or_digests`)
+
+        let mut digests = Vec::new();
+
+        model.access_mut(|state| {
+            let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+
+            let mut changed = false;
+
+            for efuse in efuses {
+                if let Efuse::KeyDigest {
+                    block,
+                    digest_value,
+                    purpose,
+                } = &efuse.efuse
+                {
+                    digests.push((block.clone(), digest_value.clone(), purpose.clone()));
+                }
+
+                efuse.status = ProvisioningStatus::Pending;
+                changed = true;
+            }
+
+            changed
+        });
+
+        if !digests.is_empty() {
+            let digests_output = efuse::burn_key_digests(
+                protect_digests,
+                chip,
+                port,
+                baud,
+                dry_run,
+                digests.iter().map(|(block, digest, purpose)| {
+                    (block.as_str(), digest.as_slice(), purpose.as_str())
+                }),
+            )
+            .context("Burning key digests failed")?;
+
+            model.modify(|state| {
+                let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+
+                for efuse in efuses {
+                    if let Efuse::KeyDigest { .. } = &efuse.efuse {
+                        efuse.status = ProvisioningStatus::Done;
+                    }
+                }
+            });
+
+            write!(&mut output, "{digests_output}\n\n")?;
         }
 
         // Step 3: Finally, burn all params
