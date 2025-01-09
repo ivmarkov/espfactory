@@ -4,6 +4,7 @@ use core::future::Future;
 use std::fmt::Write as _;
 use std::fs::{self, DirEntry, File};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
 
 use alloc::sync::Arc;
@@ -18,6 +19,8 @@ use embassy_time::{Duration, Ticker};
 use espflash::flasher::ProgressCallbacks;
 
 use log::{error, info};
+
+use tempfile::NamedTempFile;
 
 use crate::bundle::{Bundle, Efuse, Params, ProvisioningStatus};
 use crate::efuse;
@@ -531,15 +534,83 @@ where
             ps.bundle.set_status_all(ProvisioningStatus::Pending);
         });
 
-        let (chip, flash_size, flash_data) = self.model.access(|state| {
+        let (chip, flash_size, keys, mut flash_data) = self.model.access(|state| {
             let ps = state.provision();
 
             (
                 ps.bundle.params.chip,
                 ps.bundle.params.flash_size,
+                ps.bundle
+                    .get_flash_encrypt_keys()
+                    .map(|key| key.to_vec())
+                    .collect::<Vec<_>>(),
                 ps.bundle.get_flash_data().collect::<Vec<_>>(),
             )
         });
+
+        if self.conf.flash_encrypt && flash_data.iter().any(|fd| fd.encrypted_partition) {
+            let key = if keys.is_empty() {
+                anyhow::bail!("No encryption keys provided for flash data");
+            } else if keys.len() > 1 {
+                anyhow::bail!("Multiple encryption keys provided for flash data");
+            } else {
+                &keys[0]
+            };
+
+            let key_file = NamedTempFile::new().context("Creating temp key file failed")?;
+            fs::write(key_file.path(), key).context("Creating temp key file failed")?;
+
+            info!(
+                "About to ENCRYPT flash data: Chip={chip:?}, Flash Size={flash_size:?}, Images N={}",
+                flash_data.len()
+            );
+
+            let espsecure = esptools::Tool::EspSecure.mount()?;
+
+            for flash_data in &mut flash_data {
+                if flash_data.encrypted_partition {
+                    info!("Encrypting image at offset `{:x}`", flash_data.offset);
+
+                    let input_file =
+                        NamedTempFile::new().context("Creating temp input file failed")?;
+                    fs::write(input_file.path(), flash_data.data.as_slice())
+                        .context("Creating temp input file failed")?;
+
+                    let output_file =
+                        NamedTempFile::new().context("Creating temp output file failed")?;
+
+                    let mut command = Command::new(espsecure.path());
+
+                    command
+                        .arg("encrypt_flash_data")
+                        .arg("--aes_xts")
+                        .arg("--keyfile")
+                        .arg(key_file.path())
+                        .arg("--address")
+                        .arg(format!("0x{:x}", flash_data.offset))
+                        .arg("--output")
+                        .arg(output_file.path())
+                        .arg(input_file.path());
+
+                    let output = command.output().with_context(|| {
+                        "Executing the espsecure tool with command `encrypt_flash_data` failed"
+                            .to_string()
+                    })?;
+
+                    if !output.status.success() {
+                        anyhow::bail!(
+                            "espsecure tool `encrypt_flash_data` command failed with status: {}. Stderr output:\n{}",
+                            output.status,
+                            core::str::from_utf8(&output.stderr).unwrap_or("???")
+                        );
+                    }
+
+                    flash_data.data = Arc::new(
+                        fs::read(output_file.path()).context("Reading encrypted data failed")?,
+                    );
+                }
+            }
+        }
 
         info!(
             "About to flash data: Chip={chip:?}, Flash Size={flash_size:?}, Images N={}",

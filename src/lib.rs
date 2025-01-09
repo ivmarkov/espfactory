@@ -46,6 +46,12 @@ pub struct Config {
     /// Whether to protect the digests to be burned in the eFuse
     #[serde(default)]
     pub efuse_protect_digests: bool,
+    /// Whether to in-place encrypt the bootloader, partition-table
+    /// and all images going to partitions marked as encrypted.
+    /// Requires exactly one key with purpose `XTS_AES_128_KEY`
+    /// to be present in the bundle
+    #[serde(default)]
+    pub flash_encrypt: bool,
     /// The serial port to use for communication with the device
     ///
     /// If not provided, the first available port where an ESP chip is
@@ -110,6 +116,7 @@ impl Config {
             efuse_protect_digests: false,
             port: None,
             flash_no_stub: false,
+            flash_encrypt: false,
             flash_speed: None,
             efuse_speed: None,
             bundle_identification: BundleIdentification::None,

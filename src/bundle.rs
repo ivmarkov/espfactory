@@ -618,6 +618,22 @@ extra_1,  data, 0x06,            ,   20K,
         })
     }
 
+    /// Get all flash encryption keys (if any)
+    pub(crate) fn get_flash_encrypt_keys(&self) -> impl Iterator<Item = &'_ [u8]> + '_ {
+        self.efuse_mapping.iter().filter_map(|mapping| {
+            if let Efuse::Key {
+                block: _,
+                key_value,
+                purpose,
+            } = &mapping.efuse
+            {
+                (purpose == "XTS_AES_128_KEY").then_some(key_value.as_slice())
+            } else {
+                None
+            }
+        })
+    }
+
     /// Get the flash data to be flashed to the device
     pub(crate) fn get_flash_data(&self) -> impl Iterator<Item = FlashData> + '_ {
         self.parts_mapping.iter().filter_map(|mapping| {
@@ -625,6 +641,9 @@ extra_1,  data, 0x06,            ,   20K,
                 mapping.image.as_ref().map(|image| FlashData {
                     offset: partition.offset(),
                     data: image.data.clone(),
+                    encrypted_partition: partition.encrypted()
+                        || partition.name() == Self::BOOTLOADER_NAME
+                        || partition.name() == Self::PART_TABLE_NAME,
                 })
             })
         })
@@ -814,6 +833,8 @@ pub struct FlashData {
     pub offset: u32,
     /// The data to be flashed
     pub data: Arc<Vec<u8>>,
+    /// Whether the partition where the data is to be flashed is marked as encrypted
+    pub encrypted_partition: bool,
 }
 
 /// The mapping of a partition to an image
