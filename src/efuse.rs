@@ -212,7 +212,7 @@ where
     // The bootloader would fix these anyway, when configured properly.
     //
     // See also:
-    //https://github.com/espressif/esp-idf/issues/11888
+    // https://github.com/espressif/esp-idf/issues/11888
     if !protect_keys {
         command.arg("--no-protect-key");
     }
