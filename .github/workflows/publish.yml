@@ -1,0 +1,38 @@
+name: Publish
+
+on:
+  workflow_dispatch
+
+env:
+  rust_toolchain: stable
+  CRATE_NAME: espfactory
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup | Checkout
+        uses: actions/checkout@v2
+      - name: Setup | Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.rust_toolchain }}
+      - name: Setup | Std
+        run: rustup component add rust-src --toolchain ${{ env.rust_toolchain }}-x86_64-unknown-linux-gnu
+      - name: Setup | Set default toolchain
+        run: rustup default ${{ env.rust_toolchain }}
+      - name: Login
+        run: cargo login ${{ secrets.crates_io_token }}
+      - name: Build | Publish
+        run: cargo publish
+      - name: Get the crate version from cargo
+        run: |
+          version=$(cargo metadata --format-version=1 --no-deps | jq -r ".packages[] | select(.name == \"${{env.CRATE_NAME}}\") | .version")
+          echo "crate_version=$version" >> $GITHUB_ENV
+          echo "${{env.CRATE_NAME}} version: $version"
+      - name: Tag the new release
+        uses: rickstaa/action-create-tag@v1
+        with:
+          tag: v${{env.crate_version}}
+          message: "Release v${{env.crate_version}}"
