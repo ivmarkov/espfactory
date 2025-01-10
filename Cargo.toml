@@ -39,7 +39,7 @@ zip = { version = "2", default-features = false, features = ["deflate", "deflate
 anyhow = "1"
 esp-idf-part = "0.5"
 espflash = { version = "3.2", default-features = false, features = ["cli"] }
-esptools = { git = "http://github.com/ivmarkov/esptools", default-features = false, features = ["espefuse", "espsecure"] }
+esptools = { version = "0.1", default-features = false, features = ["espefuse", "espsecure"] }
 serialport = { version = "4.6", default-features = false }
 log = "0.4"
 chrono = "0.4"
