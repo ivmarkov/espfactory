@@ -22,7 +22,7 @@ use log::{error, info};
 
 use tempfile::NamedTempFile;
 
-use crate::bundle::{Bundle, Efuse, Params, ProvisioningStatus};
+use crate::bundle::{Bundle, Chip, Efuse, Params, ProvisioningStatus};
 use crate::efuse;
 use crate::flash;
 use crate::input::{ConfirmOutcome, Input};
@@ -439,13 +439,12 @@ where
 
         info!("About to read Chip IDs from eFuse");
 
-        let efuse_chip: Option<String> = None; // TODO
         let efuse_port = self.conf.port.clone();
         let efuse_baud = self.conf.efuse_speed.map(|speed| speed.to_string());
 
         let efuse_values = unblock("efuse-summary", move || {
             let efuse_values = efuse::summary(
-                efuse_chip.as_deref(),
+                None,
                 efuse_port.as_deref(),
                 efuse_baud.as_deref(),
                 EFUSE_VALUES.iter().copied(),
@@ -645,7 +644,6 @@ where
 
         let efuse_protect_keys = self.conf.efuse_protect_keys;
         let efuse_protect_digests = self.conf.efuse_protect_digests;
-        let efuse_chip: Option<String> = None; // TODO
         let efuse_port = self.conf.port.clone();
         let efuse_baud = self.conf.efuse_speed.map(|speed| speed.to_string());
         let efuse_dry_run = self.conf.efuse_dry_run;
@@ -655,7 +653,7 @@ where
                 &model,
                 efuse_protect_keys,
                 efuse_protect_digests,
-                efuse_chip.as_deref(),
+                chip,
                 efuse_port.as_deref(),
                 efuse_baud.as_deref(),
                 efuse_dry_run,
@@ -823,7 +821,7 @@ where
         model: &Model,
         protect_keys: bool,
         protect_digests: bool,
-        chip: Option<&str>,
+        chip: Chip,
         port: Option<&str>,
         baud: Option<&str>,
         dry_run: bool,

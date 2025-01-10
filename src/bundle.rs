@@ -811,8 +811,23 @@ impl Chip {
         }
     }
 
+    /// Convert the `Chip` to a string representation
+    /// suitable for usage with the Espressif tools (`esptool.py`, `espefuse.py`)
+    pub const fn as_tools_str(&self) -> &str {
+        match self {
+            Self::Esp32 => "esp32",
+            Self::Esp32c2 => "esp32c2",
+            Self::Esp32c3 => "esp32c3",
+            Self::Esp32c6 => "esp32c6",
+            Self::Esp32h2 => "esp32h2",
+            Self::Esp32p4 => "esp32p4",
+            Self::Esp32s2 => "esp32s2",
+            Self::Esp32s3 => "esp32s3",
+        }
+    }
+
     /// Convert the `Chip` to a `espflash::targets::Chip` instance
-    pub fn to_flash_chip(self) -> espflash::targets::Chip {
+    pub const fn to_flash_chip(self) -> espflash::targets::Chip {
         match self {
             Self::Esp32 => espflash::targets::Chip::Esp32,
             Self::Esp32c2 => espflash::targets::Chip::Esp32c2,

@@ -7,6 +7,8 @@ use anyhow::Context;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bundle::Chip;
+
 /// An eFuse value as returned by the Espressif eFuse tool when the command `espefuse summary --format json` is used
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EfuseValue {
@@ -32,7 +34,7 @@ pub struct EfuseValue {
 /// # Returns
 /// A map of eFuse values by name
 pub fn summary<'a, I>(
-    chip: Option<&str>,
+    chip: Option<Chip>,
     port: Option<&str>,
     baud: Option<&str>,
     values: I,
@@ -46,7 +48,7 @@ where
     let mut command = Command::new(esptools::Tool::EspEfuse.mount()?.path());
 
     if let Some(chip) = chip {
-        command.arg("--chip").arg(chip);
+        command.arg("--chip").arg(chip.as_tools_str());
     }
 
     if let Some(port) = port {
@@ -75,26 +77,27 @@ where
 
     let status = command
         .status()
-        .context("Executing the eFuse tool with command `summary` failed")?;
+        .context("Executing the eFuse tool with command `{command:?}` failed")?;
 
     if !status.success() {
         anyhow::bail!(
-            "eFuse tool `summary` command failed with status: {}. Is the PCB connected?",
+            "eFuse tool command {command:?} failed with status: {}. Is the PCB connected?",
             status
         );
     }
 
-    let summary = fs::read_to_string(tempfile.path())
-        .context("Reading the eFuse tool `summary` command output failed")?;
+    let summary = fs::read_to_string(tempfile.path()).with_context(|| {
+        format!("Reading the eFuse tool command `{command:?}` command output failed")
+    })?;
 
     let summary = serde_json::from_str::<HashMap<String, EfuseValue>>(&summary)
-        .context("Parsing the eFuse tool `summary` command output failed")?;
+        .with_context(|| format!("Parsing the eFuse tool command `{command:?}` command output===\n{summary}\n=== failed"))?;
 
     Ok(summary)
 }
 
 pub fn burn_efuses<'a, I>(
-    chip: Option<&str>,
+    chip: Chip,
     port: Option<&str>,
     baud: Option<&str>,
     dry_run: bool,
@@ -105,9 +108,7 @@ where
 {
     let mut command = Command::new(esptools::Tool::EspEfuse.mount()?.path());
 
-    if let Some(chip) = chip {
-        command.arg("--chip").arg(chip);
-    }
+    command.arg("--chip").arg(chip.as_tools_str());
 
     if let Some(port) = port {
         command.arg("--port").arg(port);
@@ -126,12 +127,12 @@ where
         command.arg(value.to_string());
     }
 
-    burn_exec("burn_efuse", dry_run, &mut command)
+    burn_exec(dry_run, &mut command)
 }
 
 pub fn burn_keys<'a, I>(
     protect_keys: bool,
-    chip: Option<&str>,
+    chip: Chip,
     port: Option<&str>,
     baud: Option<&str>,
     dry_run: bool,
@@ -145,7 +146,7 @@ where
 
 pub fn burn_key_digests<'a, I>(
     protect_digests: bool,
-    chip: Option<&str>,
+    chip: Chip,
     port: Option<&str>,
     baud: Option<&str>,
     dry_run: bool,
@@ -168,7 +169,7 @@ where
 fn burn_keys_or_digests<'a, I>(
     protect_keys: bool,
     cmd: &str,
-    chip: Option<&str>,
+    chip: Chip,
     port: Option<&str>,
     baud: Option<&str>,
     dry_run: bool,
@@ -179,9 +180,7 @@ where
 {
     let mut command = Command::new(esptools::Tool::EspEfuse.mount()?.path());
 
-    if let Some(chip) = chip {
-        command.arg("--chip").arg(chip);
-    }
+    command.arg("--chip").arg(chip.as_tools_str());
 
     if let Some(port) = port {
         command.arg("--port").arg(port);
@@ -190,6 +189,12 @@ where
     if let Some(baud) = baud {
         command.arg("--baud").arg(baud);
     }
+
+    // ... or else we need to type "BURN" in the terminal which is impossible
+    // as the provisioning process is not interactive
+    command.arg("--do-not-confirm");
+
+    command.arg(cmd);
 
     // NOTE: VERY, VERY IMPORTANT
     // As mentoned here:
@@ -214,14 +219,12 @@ where
     // See also:
     // https://github.com/espressif/esp-idf/issues/11888
     if !protect_keys {
-        command.arg("--no-protect-key");
+        if matches!(chip, Chip::Esp32) {
+            command.arg("--no-protect-key");
+        } else {
+            command.arg("--no-read-protect").arg("--no-write-protect");
+        }
     }
-
-    // ... or else we need to type "BURN" in the terminal which is impossible
-    // as the provisioning process is not interactive
-    command.arg("--do-not-confirm");
-
-    command.arg(cmd);
 
     let mut temp_files = Vec::new();
 
@@ -246,27 +249,28 @@ where
         command.arg(purpose);
     }
 
-    burn_exec(cmd, dry_run, &mut command)
+    burn_exec(dry_run, &mut command)
 }
 
-fn burn_exec(command_desc: &str, dry_run: bool, command: &mut Command) -> anyhow::Result<String> {
+fn burn_exec(dry_run: bool, command: &mut Command) -> anyhow::Result<String> {
     if dry_run {
         return Ok("".to_string());
     }
 
-    let output = command.output().with_context(|| {
-        format!("Executing the eFuse tool with command `{command_desc}` failed")
-    })?;
+    let output = command
+        .output()
+        .with_context(|| format!("Executing the eFuse tool with command `{command:?}` failed"))?;
 
     if !output.status.success() {
         anyhow::bail!(
-            "eFuse tool `{command_desc}` command failed with status: {}. Is the PCB connected? Stderr output:\n{}",
+            "eFuse tool `{command:?}` command failed with status: {}. Is the PCB connected?\nStderr output:\n{}\nStdout output:\n{}",
             output.status,
-            core::str::from_utf8(&output.stderr).unwrap_or("???")
+            core::str::from_utf8(&output.stderr).unwrap_or("???"),
+            core::str::from_utf8(&output.stdout).unwrap_or("???")
         );
     }
 
     core::str::from_utf8(&output.stdout)
-        .with_context(|| format!("Parsing the eFuse tool `{command_desc}` command output failed"))
+        .with_context(|| format!("Parsing the eFuse tool `{command:?}` command output failed"))
         .map(str::to_string)
 }
