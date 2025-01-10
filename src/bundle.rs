@@ -939,12 +939,16 @@ impl Efuse {
                 let name = parts
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?;
-                let value = u32::from_str_radix(
-                    parts
-                        .next()
-                        .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?,
-                    16,
-                )?;
+
+                let value_str = parts
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid efuse value for name `{name}"))?;
+
+                let value_str_num = value_str.strip_prefix("0x").ok_or_else(|| {
+                    anyhow::anyhow!("Invalid efuse value `{value_str}` for name `{name}")
+                })?;
+
+                let value = u32::from_str_radix(value_str_num, 16)?;
 
                 if parts.next().is_some() {
                     anyhow::bail!("Invalid efuse name {name}");
