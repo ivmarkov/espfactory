@@ -109,7 +109,7 @@ where
             .write_bins_to_flash(&segments, Some(&mut progress))
             .context("Flashing failed")?;
     } else {
-        info!("Dry run: skipping flashing");
+        warn!("Flash dry run mode: flashing skipped");
     }
 
     Ok(())

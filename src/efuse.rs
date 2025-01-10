@@ -5,6 +5,8 @@ use std::process::{Command, Stdio};
 
 use anyhow::Context;
 
+use log::{info, warn};
+
 use serde::{Deserialize, Serialize};
 
 use crate::bundle::Chip;
@@ -254,8 +256,11 @@ where
 
 fn burn_exec(dry_run: bool, command: &mut Command) -> anyhow::Result<String> {
     if dry_run {
+        warn!("eFuse dry run mode: NOT executing eFuse tool command `{command:?}`");
         return Ok("".to_string());
     }
+
+    warn!("About to execute eFuse tool command `{command:?}`...");
 
     let output = command
         .output()
@@ -270,7 +275,11 @@ fn burn_exec(dry_run: bool, command: &mut Command) -> anyhow::Result<String> {
         );
     }
 
-    core::str::from_utf8(&output.stdout)
-        .with_context(|| format!("Parsing the eFuse tool `{command:?}` command output failed"))
-        .map(str::to_string)
+    let output = core::str::from_utf8(&output.stdout)
+        .with_context(|| format!("Loading the eFuse tool `{command:?}` command output failed"))
+        .map(str::to_string)?;
+
+    info!("eFuse tool command `{command:?}` executed. Output:\n{output}");
+
+    Ok(output)
 }

@@ -59,10 +59,12 @@ struct Cli {
 enum Verbosity {
     /// Silent (no logging)
     Silent,
-    /// Regular logging
-    Regular,
-    /// Verbose logging
+    /// Warn logging (warn level)
+    Warn,
+    /// Regular logging (info level)
     #[default]
+    Regular,
+    /// Verbose logging (debug level)
     Verbose,
 }
 
@@ -70,6 +72,7 @@ impl Verbosity {
     fn log_level(&self) -> LevelFilter {
         match self {
             Self::Silent => LevelFilter::Off,
+            Self::Warn => LevelFilter::Warn,
             Self::Regular => LevelFilter::Info,
             Self::Verbose => LevelFilter::Debug,
         }
