@@ -10,7 +10,7 @@ use ratatui::DefaultTerminal;
 
 use crate::bundle::{Bundle, Efuse, ProvisioningStatus};
 use crate::logger::LOGGER;
-use crate::model::{Model, Processing, Provision, Readout, State, Status};
+use crate::model::{FullscreenLogs, Model, ModelInner, Processing, Provision, Readout, State, Status};
 
 /// The view (UI) of the application
 ///
@@ -25,19 +25,34 @@ pub struct View<'a, 'b> {
 impl<'a, 'b> View<'a, 'b> {
     /// Creates a new `View` instance with the given model and terminal
     pub fn new(model: &'a Model, term: &'b mut DefaultTerminal) -> Self {
-        Self { model, term }
+        Self {
+            model,
+            term,
+        }
     }
 
     /// Runs the view rendering loop by watching for changes in the model and re-rendering the UI
     pub async fn run(&mut self) -> anyhow::Result<()> {
         loop {
-            self.model.access(|state| {
+            self.model.access(|inner| {
                 self.term
-                    .draw(|frame| frame.render_widget(state, frame.area()))
+                    .draw(|frame| frame.render_widget(inner, frame.area()))
             })?;
 
             self.model.wait_changed().await;
         }
+    }
+}
+
+impl Widget for &ModelInner {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        self.state.render(area, buf);
+    }
+}
+
+impl Widget for &FullscreenLogs {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        render_log(area, self.position, buf);
     }
 }
 
@@ -433,7 +448,7 @@ impl Widget for &Status {
             para = para.yellow();
         }
 
-        para.render(area.inner(Margin::new(2, 4)), buf);
+        para.render(area.inner(Margin::new(1, 1)), buf);
     }
 }
 
@@ -462,16 +477,29 @@ fn render_main<'a>(
 
     block.on_blue().white().render(layout[0], buf);
 
-    let area = layout[1];
+    render_log(layout[1], None, buf);
 
-    let lines = LOGGER.lock(|logger| {
-        logger
-            .last_n(area.height as usize)
-            .cloned()
-            .collect::<Vec<_>>()
+    layout[0]
+}
+
+fn render_log<'a>(area: Rect, log_offset: Option<usize>, buf: &mut Buffer) {
+    let (lines, _count) = LOGGER.lock(|logger| {
+        let (lines, count) = if let Some(log_offset) = log_offset {
+            let (lines, count) = logger.top_n(log_offset, area.height as usize);
+
+            (lines.cloned().collect::<Vec<_>>(), count)
+        } else {
+            let (lines, count) = logger.last_n(area.height as usize);
+
+            (lines.cloned().collect::<Vec<_>>(), count)
+        };
+
+        (lines, count)
     });
 
-    for (index, line) in lines.iter().enumerate() {
+    let lines = lines.iter().map(|line| {
+        let no = Span::from(format!("{:08} ", line.no)).on_white().black();
+
         let level = Span::from(format!("[{}] ", line.level.as_str()));
 
         let level = match line.level {
@@ -482,11 +510,14 @@ fn render_main<'a>(
             log::Level::Trace => level.cyan(),
         };
 
-        let line = Line::from(vec![level, line.message.as_str().into()]);
-        line.render(Rect::new(area.x, area.y + index as u16, area.width, 1), buf);
-    }
+        Line::from(vec![no, level, line.message.as_str().into()])
+    });
 
-    layout[0]
+    let para = Paragraph::new(Text::from_iter(lines)).wrap(Wrap { trim: false });
+    let scroll_y = 0.max(para.line_count(area.width) as i32 - area.height as i32) as u16;
+
+    para.scroll((scroll_y, 0))
+        .render(Rect::new(area.x, area.y, area.width, area.height), buf);
 }
 
 bitflags! {
@@ -529,6 +560,11 @@ impl Keys {
             if self.contains(Self::RESET) {
                 instructions.push(" Reset ".into());
                 instructions.push("<Esc>".yellow().bold());
+            }
+
+            if self.contains(Self::QUIT) {
+                instructions.push(" Logs ".into());
+                instructions.push("<Alt-L>".yellow().bold());
             }
 
             if self.contains(Self::QUIT) {

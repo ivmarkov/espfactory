@@ -8,42 +8,97 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 
 use crate::bundle::Bundle;
+use crate::LOGGER;
 
 extern crate alloc;
+
+#[derive(Debug)]
+pub struct FullscreenLogs {
+    pub position: Option<usize>,
+}
+
+impl FullscreenLogs {
+    pub const fn new() -> Self {
+        Self {
+            position: None,
+        }
+    }
+
+    pub fn scroll(&mut self, up: bool) {
+        let position = self.position.as_mut().unwrap();
+
+        if up {
+            *position = position.saturating_sub(1);
+        } else if *position < LOGGER.lock(|logger| logger.count()) - 1 {
+            *position += 1;
+        }
+    }
+
+    pub fn page_scroll(&mut self, up: bool, height: u16) {
+        let position = self.position.as_mut().unwrap();
+
+        if up {
+            *position = position.saturating_sub(height as usize);
+        } else if (*position as i32)
+            < (LOGGER.lock(|logger| logger.count()) as i32 - height as i32).max(0)
+        {
+            *position += height as usize;
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ModelInner {
+    pub state: State,
+    pub fullscreen_logs: FullscreenLogs,
+}
+
+impl ModelInner {
+    pub const fn new() -> Self {
+        Self {
+            state: State::new(),
+            fullscreen_logs: FullscreenLogs::new(),
+        }
+    }
+}
 
 /// The model of the factory application
 pub struct Model {
     /// The state of the model (i.e. awating readouts, displaying an error, preparing the bundle, flashing it etc. etc.)
-    state: Mutex<CriticalSectionRawMutex, RefCell<State>>, // TODO: Change to std::sync::Mutex?
+    state: Mutex<CriticalSectionRawMutex, RefCell<ModelInner>>, // TODO: Change to std::sync::Mutex?
     /// A signal to notify that the model has changed
     /// Used to trigger redraws of the UI
     changed: Arc<Signal<CriticalSectionRawMutex, ()>>,
+    pub change_main_input: Signal<CriticalSectionRawMutex, ()>,
+    pub change_log_input: Signal<CriticalSectionRawMutex, ()>,
 }
 
 impl Model {
     /// Create a new model in the initial state (readouts)
     pub const fn new(changed: Arc<Signal<CriticalSectionRawMutex, ()>>) -> Self {
         Self {
-            state: Mutex::new(RefCell::new(State::new())),
+            state: Mutex::new(RefCell::new(ModelInner::new())),
             changed,
+            change_main_input: Signal::new(),
+            change_log_input: Signal::new(),
         }
     }
 
     /// Get the current state of the model in the given closure
     pub fn access<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&State) -> R,
+        F: FnOnce(&ModelInner) -> R,
     {
-        self.state.lock(|state| f(&state.borrow()))
+        self.state.lock(|inner: &RefCell<ModelInner>| f(&inner.borrow()))
     }
 
     /// Modify the state of the model by applying the given closure to it
     pub fn modify<F>(&self, f: F)
     where
-        F: FnOnce(&mut State),
+        F: FnOnce(&mut ModelInner),
     {
-        self.access_mut(|state| {
-            f(state);
+        self.access_mut(|inner| {
+            f(inner);
             true
         });
     }
@@ -52,12 +107,12 @@ impl Model {
     /// If the closure returns `true`, the model is considered to have changed and the `changed` signal is triggered
     pub fn access_mut<F>(&self, f: F)
     where
-        F: FnOnce(&mut State) -> bool,
+        F: FnOnce(&mut ModelInner) -> bool,
     {
-        self.state.lock(|state| {
-            let mut state = state.borrow_mut();
+        self.state.lock(|inner| {
+            let mut inner = inner.borrow_mut();
 
-            if f(&mut state) {
+            if f(&mut inner) {
                 self.changed.signal(());
             }
         })

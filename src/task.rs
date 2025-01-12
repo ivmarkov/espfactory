@@ -154,8 +154,8 @@ where
                         Err(other) => Err(other)?,
                     }
 
-                    self.model.access(|state| {
-                        let readout = state.readout();
+                    self.model.access(|inner| {
+                        let readout = inner.state.readout();
 
                         for (name, value) in &readout.efuse_readouts {
                             summary.push((name.clone(), value.clone()));
@@ -168,7 +168,7 @@ where
 
                     break loop {
                         // TODO: Not very efficient
-                        let readout = self.model.access(|state| state.readout().clone());
+                        let readout = self.model.access(|inner| inner.state.readout().clone());
 
                         let result = Self::handle(
                             &self.model.clone(),
@@ -182,7 +182,7 @@ where
                             Ok(bundle_id) => break bundle_id,
                             Err(TaskError::Canceled) => continue 'steps,
                             Err(TaskError::Retry) => {
-                                self.model.modify(|state| *state = State::Readout(readout));
+                                self.model.modify(|inner| inner.state = State::Readout(readout));
 
                                 continue;
                             }
@@ -202,7 +202,7 @@ where
                     }
 
                     // TODO: Not very efficient
-                    let provision = self.model.access(|state| state.provision().clone());
+                    let provision = self.model.access(|inner| inner.state.provision().clone());
 
                     let result = Self::handle(
                         &self.model.clone(),
@@ -217,7 +217,7 @@ where
                         Err(TaskError::Canceled) => continue 'steps,
                         Err(TaskError::Retry) => {
                             self.model
-                                .modify(|state| *state = State::Provision(provision));
+                                .modify(|inner| inner.state = State::Provision(provision));
 
                             continue;
                         }
@@ -253,7 +253,7 @@ where
         input: &Input<'_>,
     ) -> anyhow::Result<(), TaskError> {
         self.model
-            .modify(|state| *state = State::Processing(Processing::new(" Read eFuse IDs ")));
+            .modify(|inner| inner.state = State::Processing(Processing::new(" Read eFuse IDs ")));
 
         Self::process(&self.model.clone(), self.prep_efuse_readouts(), input).await
     }
@@ -285,18 +285,18 @@ where
             }
         };
 
-        self.model.modify(|state| {
-            let readouts = state.readout_mut();
+        self.model.modify(|inner| {
+            let readouts = inner.state.readout_mut();
             init(readouts);
         });
 
         let mut result = Ok(());
 
-        while result.is_ok() && !self.model.access(|state| state.readout().is_ready()) {
-            let key = input.get().await;
+        while result.is_ok() && !self.model.access(|inner| inner.state.readout().is_ready()) {
+            let key = input.get_main().await;
 
-            self.model.access_mut(|state| {
-                let readouts = state.readout_mut();
+            self.model.access_mut(|inner| {
+                let readouts = inner.state.readout_mut();
 
                 let readout = &mut readouts.readouts[readouts.active];
 
@@ -352,8 +352,8 @@ where
         &mut self,
         input: &Input<'_>,
     ) -> anyhow::Result<Option<String>, TaskError> {
-        let (_test_jig_id, pcb_id, box_id) = self.model.access(|state| {
-            let readouts = state.readout();
+        let (_test_jig_id, pcb_id, box_id) = self.model.access(|inner| {
+            let readouts = inner.state.readout();
             let mut offset = 0;
 
             let test_jig_id = if self.conf.test_jig_id_readout {
@@ -387,7 +387,7 @@ where
         });
 
         self.model
-            .modify(|state| *state = State::Processing(Processing::new(" Preparing bundle ")));
+            .modify(|inner| inner.state = State::Processing(Processing::new(" Preparing bundle ")));
 
         let bundle_id = match self.conf.bundle_identification {
             BundleIdentification::None => None,
@@ -433,8 +433,8 @@ where
             "PSRAMP_VENDOR",
         ];
 
-        self.model.modify(|state| {
-            state.processing_mut().status = "Reading Chip IDs from eFuse".to_string();
+        self.model.modify(|inner| {
+            inner.state.processing_mut().status = "Reading Chip IDs from eFuse".to_string();
         });
 
         info!("About to read Chip IDs from eFuse");
@@ -471,7 +471,7 @@ where
         }
 
         self.model
-            .modify(move |state| *state = State::Readout(Readout::new_with_efuse(efuse_values)));
+            .modify(move |inner| inner.state = State::Readout(Readout::new_with_efuse(efuse_values)));
 
         Ok(())
     }
@@ -500,8 +500,8 @@ where
             )
             .await?;
 
-            self.model.modify(|state| {
-                state.processing_mut().status =
+            self.model.modify(|inner| {
+                inner.state.processing_mut().status =
                     format!("Merging {} and {}", base_bundle.name, bundle.name);
             });
 
@@ -512,8 +512,8 @@ where
             bundle
         };
 
-        self.model.modify(move |state| {
-            *state = State::Provision(Provision {
+        self.model.modify(move |inner| {
+            inner.state = State::Provision(Provision {
                 bundle,
                 provisioning: false,
             })
@@ -524,8 +524,8 @@ where
 
     /// Provision the bundle by flashing and optionally efusing the chip with the bundle content
     async fn prov_bundle(&mut self) -> anyhow::Result<()> {
-        self.model.modify(|state| {
-            let ps = state.provision_mut();
+        self.model.modify(|inner| {
+            let ps = inner.state.provision_mut();
             ps.provisioning = true;
 
             info!("About to provision bundle `{}`", ps.bundle.name);
@@ -533,8 +533,8 @@ where
             ps.bundle.set_status_all(ProvisioningStatus::Pending);
         });
 
-        let (chip, flash_size, keys, mut flash_data) = self.model.access(|state| {
-            let ps = state.provision();
+        let (chip, flash_size, keys, mut flash_data) = self.model.access(|inner| {
+            let ps = inner.state.provision();
 
             (
                 ps.bundle.params.chip,
@@ -672,14 +672,14 @@ where
             fs::remove_file(entry.path()).context("Emptying loaded bundle directory failed")?;
         }
 
-        self.model.modify(|state| {
+        self.model.modify(|inner| {
             info!(
                 "Provisioning bundle `{}` complete",
-                state.provision().bundle.name
+                inner.state.provision().bundle.name
             );
 
-            state.success(
-                format!(" {} ", state.provision().bundle.name),
+            inner.state.success(
+                format!(" {} ", inner.state.provision().bundle.name),
                 "Provisioning complete.",
             );
         });
@@ -698,8 +698,8 @@ where
         T: BundleLoader,
     {
         let bundle = loop {
-            model.modify(|state| {
-                state.processing_mut().status = "Checking".into();
+            model.modify(|inner| {
+                inner.state.processing_mut().status = "Checking".into();
             });
 
             if bundle_id.is_none() {
@@ -726,8 +726,8 @@ where
                 }
             }
 
-            model.modify(|state| {
-                state.processing_mut().status = "Fetching".into();
+            model.modify(|inner| {
+                inner.state.processing_mut().status = "Fetching".into();
             });
 
             let mut bundle_temp_path = bundle_dir.join(Self::BUNDLE_TEMP_DIR_NAME).join("bundle");
@@ -799,8 +799,8 @@ where
             .unwrap()
             .to_string(); // TODO
 
-        model.modify(|state| {
-            state.processing_mut().status = format!("Processing {bundle_name}");
+        model.modify(|inner| {
+            inner.state.processing_mut().status = format!("Processing {bundle_name}");
         });
 
         info!("About to prep bundle file `{}`", bundle_path.display());
@@ -828,8 +828,8 @@ where
     ) -> anyhow::Result<String> {
         let mut output = String::new();
 
-        model.modify(|state| {
-            let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+        model.modify(|inner| {
+            let efuses = &mut inner.state.provision_mut().bundle.efuse_mapping;
 
             for efuse in efuses {
                 efuse.status = ProvisioningStatus::Pending;
@@ -840,8 +840,8 @@ where
 
         let mut keys = Vec::new();
 
-        model.access_mut(|state| {
-            let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+        model.access_mut(|inner| {
+            let efuses = &mut inner.state.provision_mut().bundle.efuse_mapping;
 
             let mut changed = false;
 
@@ -875,8 +875,8 @@ where
             )
             .context("Burning keys failed")?;
 
-            model.modify(|state| {
-                let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+            model.modify(|inner| {
+                let efuses = &mut inner.state.provision_mut().bundle.efuse_mapping;
 
                 for efuse in efuses {
                     if let Efuse::Key { .. } = &efuse.efuse {
@@ -892,8 +892,8 @@ where
 
         let mut digests = Vec::new();
 
-        model.access_mut(|state| {
-            let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+        model.access_mut(|inner| {
+            let efuses = &mut inner.state.provision_mut().bundle.efuse_mapping;
 
             let mut changed = false;
 
@@ -927,8 +927,8 @@ where
             )
             .context("Burning key digests failed")?;
 
-            model.modify(|state| {
-                let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+            model.modify(|inner| {
+                let efuses = &mut inner.state.provision_mut().bundle.efuse_mapping;
 
                 for efuse in efuses {
                     if let Efuse::KeyDigest { .. } = &efuse.efuse {
@@ -944,8 +944,8 @@ where
 
         let mut params = Vec::new();
 
-        model.access_mut(|state| {
-            let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+        model.access_mut(|inner| {
+            let efuses = &mut inner.state.provision_mut().bundle.efuse_mapping;
 
             let mut changed = false;
 
@@ -971,8 +971,8 @@ where
             )
             .context("Burning params failed")?;
 
-            model.modify(|state| {
-                let efuses = &mut state.provision_mut().bundle.efuse_mapping;
+            model.modify(|inner| {
+                let efuses = &mut inner.state.provision_mut().bundle.efuse_mapping;
 
                 for efuse in efuses {
                     if let Efuse::Param { .. } = &efuse.efuse {
@@ -1003,7 +1003,7 @@ where
             error!("{err_msg}: {err:?}");
 
             model
-                .modify(|state| state.error(format!(" {err_msg} "), format!("{err_msg}: {err:?}")));
+                .modify(|inner| inner.state.error(format!(" {err_msg} "), format!("{err_msg}: {err:?}")));
 
             match input.wait_confirm().await.into() {
                 Ok(_) => Err(TaskError::Retry),
@@ -1021,8 +1021,8 @@ where
     {
         let result = select3(
             Self::tick(Duration::from_millis(100), || {
-                model.modify(|state| {
-                    if let State::Processing(Processing { counter, .. }) = state {
+                model.modify(|inner| {
+                    if let State::Processing(Processing { counter, .. }) = &mut inner.state {
                         *counter += 1;
                     }
                 })
@@ -1079,8 +1079,8 @@ impl ProgressCallbacks for FlashProgress {
     fn init(&mut self, addr: u32, total: usize) {
         *self.image.lock().unwrap() = Some((addr, total));
 
-        self.model.access_mut(|state| {
-            state
+        self.model.access_mut(|inner| {
+            inner.state
                 .provision_mut()
                 .bundle
                 .set_status(addr, ProvisioningStatus::InProgress(0))
@@ -1089,8 +1089,8 @@ impl ProgressCallbacks for FlashProgress {
 
     fn update(&mut self, current: usize) {
         if let Some((addr, total)) = *self.image.lock().unwrap() {
-            self.model.access_mut(|state| {
-                state.provision_mut().bundle.set_status(
+            self.model.access_mut(|inner| {
+                inner.state.provision_mut().bundle.set_status(
                     addr,
                     ProvisioningStatus::InProgress((current * 100 / total) as u8),
                 )
@@ -1100,8 +1100,8 @@ impl ProgressCallbacks for FlashProgress {
 
     fn finish(&mut self) {
         if let Some((addr, _)) = self.image.lock().unwrap().take() {
-            self.model.access_mut(|state| {
-                state
+            self.model.access_mut(|inner| {
+                inner.state
                     .provision_mut()
                     .bundle
                     .set_status(addr, ProvisioningStatus::Done)

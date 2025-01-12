@@ -28,7 +28,7 @@ s3 = ["aws-config", "aws-sdk-s3"]
 
 [dependencies]
 crossterm = "0.28"
-ratatui = "0.29"
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 embassy-sync = { version = "0.5", features = ["std"] }
 embassy-time = { version = "0.3", features = ["std", "generic-queue"] }
 embassy-futures = "0.1"

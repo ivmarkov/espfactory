@@ -16,7 +16,7 @@ pub type LogFile = File;
 
 /// The global logger used by the factory
 pub static LOGGER: Logger<LogFile, Arc<Signal<CriticalSectionRawMutex, ()>>> =
-    Logger::new(LevelFilter::Info, LevelFilter::Info, 20);
+    Logger::new(LevelFilter::Info, LevelFilter::Info, 1000);
 
 /// A trait for signaling that a log message has been written
 pub trait LogSignal {
@@ -71,6 +71,7 @@ where
                 last_n: VecDeque::new(),
                 last_n_len,
                 last_n_level,
+                count: 0,
                 out: None,
             }),
             signal: Mutex::new(None),
@@ -136,6 +137,7 @@ pub struct LoggerState<T> {
     last_n: VecDeque<LogLine>,
     last_n_len: usize,
     last_n_level: LevelFilter,
+    count: usize,
     out: Option<T>,
 }
 
@@ -158,16 +160,34 @@ where
         core::mem::replace(&mut self.out, out)
     }
 
+    /// Get the number of lines in the buffer
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
     /// Get an iterator over the last `n` log lines kept in memory
     ///
     /// # Arguments
     /// - `n` - the number of last log lines to get
-    pub fn last_n(&self, n: usize) -> impl Iterator<Item = &LogLine> {
-        self.last_n.iter().skip(if self.last_n.len() > n {
+    pub fn last_n(&self, n: usize) -> (impl Iterator<Item = &LogLine>, usize) {
+        let lines = self.last_n.iter().skip(if self.last_n.len() > n {
             self.last_n.len() - n
         } else {
             0
-        })
+        });
+
+        (lines, self.count)
+    }
+
+    /// Get an iterator over the top `n` log lines kept in memory starting from `offset`
+    ///
+    /// # Arguments
+    /// - `offset` - the offset from the start of the log lines
+    /// - `n` - the number of log lines to get
+    pub fn top_n(&self, offset: usize, n: usize) -> (impl Iterator<Item = &LogLine>, usize) {
+        let lines = self.last_n.iter().skip(offset).take(n);
+
+        (lines, self.count)
     }
 
     fn log(&mut self, record: &Record) -> bool {
@@ -190,6 +210,7 @@ where
                     self.push(LogLine {
                         level: record.level(),
                         message: line.to_string(),
+                        no: self.count,
                     });
                 }
 
@@ -206,6 +227,7 @@ where
         }
 
         self.last_n.push_back(msg);
+        self.count += 1;
     }
 }
 
@@ -216,6 +238,8 @@ pub struct LogLine {
     pub level: Level,
     /// The message to be displayed on that line
     pub message: String,
+    /// Line no
+    pub no: usize,
 }
 
 pub mod file {
