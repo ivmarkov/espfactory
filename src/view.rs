@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Widget};
+use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Widget, Wrap};
 use ratatui::DefaultTerminal;
 
 use crate::bundle::{Bundle, Efuse, ProvisioningStatus};
@@ -425,7 +425,9 @@ impl Widget for &Status {
             buf,
         );
 
-        let mut para = Paragraph::new(self.message.clone()).bold();
+        let mut para = Paragraph::new(self.message.clone())
+            .bold()
+            .wrap(Wrap { trim: false });
 
         if self.error {
             para = para.yellow();
