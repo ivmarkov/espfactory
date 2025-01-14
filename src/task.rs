@@ -27,10 +27,10 @@ use crate::efuse;
 use crate::flash;
 use crate::input::{ConfirmOutcome, Input};
 use crate::loader::BundleLoader;
-use crate::model::{Model, Processing, Provision, Readout, State};
+use crate::model::{FileLogs, Model, Processing, Provision, Readout, State};
 use crate::uploader::BundleLogsUploader;
 use crate::utils::futures::unblock;
-use crate::{BundleIdentification, Config, LOGGER};
+use crate::{BundleIdentification, Config};
 
 extern crate alloc;
 
@@ -117,13 +117,21 @@ where
     async fn step(&mut self, input: &Input<'_>) -> Result<(), TaskError> {
         loop {
             {
-                let log_file = super::logger::file::start()?;
-                LOGGER.lock(|logger| logger.swap_out(Some(log_file)));
+                self.model.modify(|inner| {
+                    inner.logs.clear().unwrap();
+                });
             }
 
-            let _guard = scopeguard::guard((), |_| {
-                LOGGER.lock(|logger| logger.swap_out(None));
-            });
+            let _guard = {
+                let model = self.model.clone();
+
+                scopeguard::guard((), move |_| {
+                    model.access_mut(|inner| {
+                        inner.logs.file.grab();
+                        ((), false)
+                    });
+                })
+            };
 
             let (bundle_id, bundle_name, summary) = 'steps: loop {
                 let mut summary = Vec::new();
@@ -182,7 +190,8 @@ where
                             Ok(bundle_id) => break bundle_id,
                             Err(TaskError::Canceled) => continue 'steps,
                             Err(TaskError::Retry) => {
-                                self.model.modify(|inner| inner.state = State::Readout(readout));
+                                self.model
+                                    .modify(|inner| inner.state = State::Readout(readout));
 
                                 continue;
                             }
@@ -227,8 +236,13 @@ where
             };
 
             // Step 5
-            if let Some(log_file) = LOGGER.lock(|logger| logger.swap_out(None)) {
-                let log = super::logger::file::finish(log_file, &summary)?;
+            let mut log_file = None;
+            self.model.modify(|inner| {
+                log_file = inner.logs.file.grab();
+            });
+
+            if let Some(log_file) = log_file {
+                let log = FileLogs::finish(log_file, &summary)?;
                 self.bundle_logs_uploader
                     .upload_logs(log, bundle_id.as_deref(), &bundle_name)
                     .await?;
@@ -293,7 +307,7 @@ where
         let mut result = Ok(());
 
         while result.is_ok() && !self.model.access(|inner| inner.state.readout().is_ready()) {
-            let key = input.get_main().await;
+            let key = input.get_main_input().await;
 
             self.model.access_mut(|inner| {
                 let readouts = inner.state.readout_mut();
@@ -304,34 +318,34 @@ where
                     Input::NEXT => {
                         if !readout.1.is_empty() {
                             readouts.active += 1;
-                            info!("Readout `{}`: `{}`", readout.0, readout.1);
-                            return true;
+                            //info!("Readout `{}`: `{}`", readout.0, readout.1);
+                            return ((), true);
                         }
                     }
                     Input::PREV => {
                         if readouts.active == 0 && readout.1.is_empty() {
                             result = Err(TaskError::Canceled);
-                            return false;
+                            return ((), false);
                         }
 
                         init(readouts);
-                        info!("Readouts reset");
-                        return true;
+                        //info!("Readouts reset");
+                        return ((), true);
                     }
                     Input::QUIT => {
                         result = Err(TaskError::Quit);
-                        return false;
+                        return ((), false);
                     }
                     (modifiers, code) => {
                         if modifiers.is_empty() {
                             match code {
                                 KeyCode::Backspace => {
                                     readout.1.pop();
-                                    return true;
+                                    return ((), true);
                                 }
                                 KeyCode::Char(ch) => {
                                     readout.1.push(ch);
-                                    return true;
+                                    return ((), true);
                                 }
                                 _ => (),
                             }
@@ -339,7 +353,7 @@ where
                     }
                 }
 
-                false
+                ((), false)
             });
         }
 
@@ -470,8 +484,9 @@ where
             info!("Chip {key}: {value}");
         }
 
-        self.model
-            .modify(move |inner| inner.state = State::Readout(Readout::new_with_efuse(efuse_values)));
+        self.model.modify(move |inner| {
+            inner.state = State::Readout(Readout::new_with_efuse(efuse_values))
+        });
 
         Ok(())
     }
@@ -838,13 +853,12 @@ where
 
         // Step 1: Burn keys first
 
-        let mut keys = Vec::new();
-
-        model.access_mut(|inner| {
+        let keys = model.access_mut(|inner| {
             let efuses = &mut inner.state.provision_mut().bundle.efuse_mapping;
 
-            let mut changed = false;
+            let mut notify = false;
 
+            let mut keys = Vec::new();
             for efuse in efuses {
                 if let Efuse::Key {
                     block,
@@ -856,10 +870,10 @@ where
                 }
 
                 efuse.status = ProvisioningStatus::Pending;
-                changed = true;
+                notify = true;
             }
 
-            changed
+            (keys, notify)
         });
 
         if !keys.is_empty() {
@@ -890,12 +904,12 @@ where
 
         // Step 2: Burn key digests next (should be after keys, check the comment inside `efuse::burn_keys_or_digests`)
 
-        let mut digests = Vec::new();
-
-        model.access_mut(|inner| {
+        let digests = model.access_mut(|inner| {
             let efuses = &mut inner.state.provision_mut().bundle.efuse_mapping;
 
-            let mut changed = false;
+            let mut notify = false;
+
+            let mut digests = Vec::new();
 
             for efuse in efuses {
                 if let Efuse::KeyDigest {
@@ -908,10 +922,10 @@ where
                 }
 
                 efuse.status = ProvisioningStatus::Pending;
-                changed = true;
+                notify = true;
             }
 
-            changed
+            (digests, notify)
         });
 
         if !digests.is_empty() {
@@ -942,12 +956,12 @@ where
 
         // Step 3: Finally, burn all params
 
-        let mut params = Vec::new();
-
-        model.access_mut(|inner| {
+        let params = model.access_mut(|inner| {
             let efuses = &mut inner.state.provision_mut().bundle.efuse_mapping;
 
-            let mut changed = false;
+            let mut notify = false;
+
+            let mut params = Vec::new();
 
             for efuse in efuses {
                 if let Efuse::Param { name, value } = &efuse.efuse {
@@ -955,10 +969,10 @@ where
                 }
 
                 efuse.status = ProvisioningStatus::Pending;
-                changed = true;
+                notify = true;
             }
 
-            changed
+            (params, notify)
         });
 
         if !params.is_empty() {
@@ -1002,8 +1016,11 @@ where
         if let Err(TaskError::Other(err)) = result {
             error!("{err_msg}: {err:?}");
 
-            model
-                .modify(|inner| inner.state.error(format!(" {err_msg} "), format!("{err_msg}: {err:?}")));
+            model.modify(|inner| {
+                inner
+                    .state
+                    .error(format!(" {err_msg} "), format!("{err_msg}: {err:?}"))
+            });
 
             match input.wait_confirm().await.into() {
                 Ok(_) => Err(TaskError::Retry),
@@ -1080,20 +1097,25 @@ impl ProgressCallbacks for FlashProgress {
         *self.image.lock().unwrap() = Some((addr, total));
 
         self.model.access_mut(|inner| {
-            inner.state
+            let notify = inner
+                .state
                 .provision_mut()
                 .bundle
-                .set_status(addr, ProvisioningStatus::InProgress(0))
+                .set_status(addr, ProvisioningStatus::InProgress(0));
+
+            ((), notify)
         });
     }
 
     fn update(&mut self, current: usize) {
         if let Some((addr, total)) = *self.image.lock().unwrap() {
             self.model.access_mut(|inner| {
-                inner.state.provision_mut().bundle.set_status(
+                let notify = inner.state.provision_mut().bundle.set_status(
                     addr,
                     ProvisioningStatus::InProgress((current * 100 / total) as u8),
-                )
+                );
+
+                ((), notify)
             });
         }
     }
@@ -1101,10 +1123,13 @@ impl ProgressCallbacks for FlashProgress {
     fn finish(&mut self) {
         if let Some((addr, _)) = self.image.lock().unwrap().take() {
             self.model.access_mut(|inner| {
-                inner.state
+                let notify = inner
+                    .state
                     .provision_mut()
                     .bundle
-                    .set_status(addr, ProvisioningStatus::Done)
+                    .set_status(addr, ProvisioningStatus::Done);
+
+                ((), notify)
             });
         }
     }

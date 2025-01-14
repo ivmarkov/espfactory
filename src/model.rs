@@ -1,66 +1,29 @@
 use core::cell::RefCell;
 use core::num::Wrapping;
 
+use std::collections::VecDeque;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write as _};
+
 use alloc::sync::Arc;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 
+use log::{LevelFilter, Record};
+
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Paragraph, Wrap};
+use tempfile::tempfile;
+use zip::write::FileOptions;
+use zip::ZipWriter;
+
 use crate::bundle::Bundle;
-use crate::LOGGER;
 
 extern crate alloc;
-
-#[derive(Debug)]
-pub struct FullscreenLogs {
-    pub position: Option<usize>,
-}
-
-impl FullscreenLogs {
-    pub const fn new() -> Self {
-        Self {
-            position: None,
-        }
-    }
-
-    pub fn scroll(&mut self, up: bool) {
-        let position = self.position.as_mut().unwrap();
-
-        if up {
-            *position = position.saturating_sub(1);
-        } else if *position < LOGGER.lock(|logger| logger.count()) - 1 {
-            *position += 1;
-        }
-    }
-
-    pub fn page_scroll(&mut self, up: bool, height: u16) {
-        let position = self.position.as_mut().unwrap();
-
-        if up {
-            *position = position.saturating_sub(height as usize);
-        } else if (*position as i32)
-            < (LOGGER.lock(|logger| logger.count()) as i32 - height as i32).max(0)
-        {
-            *position += height as usize;
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ModelInner {
-    pub state: State,
-    pub fullscreen_logs: FullscreenLogs,
-}
-
-impl ModelInner {
-    pub const fn new() -> Self {
-        Self {
-            state: State::new(),
-            fullscreen_logs: FullscreenLogs::new(),
-        }
-    }
-}
 
 /// The model of the factory application
 pub struct Model {
@@ -69,18 +32,22 @@ pub struct Model {
     /// A signal to notify that the model has changed
     /// Used to trigger redraws of the UI
     changed: Arc<Signal<CriticalSectionRawMutex, ()>>,
-    pub change_main_input: Signal<CriticalSectionRawMutex, ()>,
-    pub change_log_input: Signal<CriticalSectionRawMutex, ()>,
+    pub main_input_changed: Signal<CriticalSectionRawMutex, ()>,
+    pub log_input_changed: Signal<CriticalSectionRawMutex, ()>,
 }
 
 impl Model {
     /// Create a new model in the initial state (readouts)
-    pub const fn new(changed: Arc<Signal<CriticalSectionRawMutex, ()>>) -> Self {
+    pub const fn new(
+        width: u16,
+        height: u16,
+        changed: Arc<Signal<CriticalSectionRawMutex, ()>>,
+    ) -> Self {
         Self {
-            state: Mutex::new(RefCell::new(ModelInner::new())),
+            state: Mutex::new(RefCell::new(ModelInner::new(width, height))),
             changed,
-            change_main_input: Signal::new(),
-            change_log_input: Signal::new(),
+            main_input_changed: Signal::new(),
+            log_input_changed: Signal::new(),
         }
     }
 
@@ -89,32 +56,34 @@ impl Model {
     where
         F: FnOnce(&ModelInner) -> R,
     {
-        self.state.lock(|inner: &RefCell<ModelInner>| f(&inner.borrow()))
+        self.state
+            .lock(|inner: &RefCell<ModelInner>| f(&inner.borrow()))
     }
 
     /// Modify the state of the model by applying the given closure to it
-    pub fn modify<F>(&self, f: F)
+    pub fn modify<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut ModelInner),
+        F: FnOnce(&mut ModelInner) -> R,
     {
-        self.access_mut(|inner| {
-            f(inner);
-            true
-        });
+        self.access_mut(|inner| (f(inner), true))
     }
 
     /// Accwess the state of the model by applying the given closure to it
     /// If the closure returns `true`, the model is considered to have changed and the `changed` signal is triggered
-    pub fn access_mut<F>(&self, f: F)
+    pub fn access_mut<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut ModelInner) -> bool,
+        F: FnOnce(&mut ModelInner) -> (R, bool),
     {
         self.state.lock(|inner| {
             let mut inner = inner.borrow_mut();
 
-            if f(&mut inner) {
+            let (result, modified) = f(&mut inner);
+
+            if modified {
                 self.changed.signal(());
             }
+
+            result
         })
     }
 
@@ -122,6 +91,29 @@ impl Model {
     /// The UI is expected to call this method to wait for the model to change before redrawing
     pub async fn wait_changed(&self) {
         self.changed.wait().await;
+    }
+
+    pub async fn wait_main_input_changed(&self) {
+        self.main_input_changed.wait().await;
+    }
+
+    pub async fn wait_log_input_changed(&self) {
+        self.log_input_changed.wait().await;
+    }
+}
+
+#[derive(Debug)]
+pub struct ModelInner {
+    pub state: State,
+    pub logs: Logs,
+}
+
+impl ModelInner {
+    pub const fn new(width: u16, height: u16) -> Self {
+        Self {
+            state: State::new(),
+            logs: Logs::new(LogsView::Bottom, width, height),
+        }
     }
 }
 
@@ -327,5 +319,328 @@ impl Status {
             message: message.into(),
             error,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct Logs {
+    pub file: FileLogs,
+    pub buffered: BufferedLogs,
+}
+
+impl Logs {
+    pub const fn new(view: LogsView, width: u16, height: u16) -> Self {
+        Self {
+            file: FileLogs::new(),
+            buffered: BufferedLogs::new(view, width, height),
+        }
+    }
+
+    pub fn clear(&mut self) -> anyhow::Result<()> {
+        self.file.start()?;
+        //TODO self.buffered.clear();
+
+        Ok(())
+    }
+
+    pub fn take(&mut self) -> Option<File> {
+        self.file.grab()
+    }
+}
+
+#[derive(Debug)]
+pub struct FileLogs {
+    pub level: LevelFilter,
+    pub file: Option<File>,
+}
+
+impl FileLogs {
+    pub const fn new() -> Self {
+        Self {
+            level: LevelFilter::Info,
+            file: None,
+        }
+    }
+
+    fn start(&mut self) -> anyhow::Result<()> {
+        let log = tempfile()?;
+
+        self.file = Some(log);
+
+        Ok(())
+    }
+
+    pub fn grab(&mut self) -> Option<File> {
+        self.file.take()
+    }
+
+    pub fn finish<'i, I, S>(mut log: File, summary: I) -> anyhow::Result<impl Read + Seek>
+    where
+        I: IntoIterator<Item = &'i (S, S)>,
+        S: AsRef<str> + 'i,
+    {
+        let mut log_zip_file = tempfile()?;
+
+        let mut log_zip = ZipWriter::new(&mut log_zip_file);
+        log_zip.start_file("log.txt", FileOptions::<()>::default())?;
+
+        log.flush()?;
+        log.seek(SeekFrom::Start(0))?;
+
+        std::io::copy(&mut log, &mut log_zip)?;
+
+        drop(log);
+
+        log_zip.start_file("log.csv", FileOptions::<()>::default())?;
+
+        let mut csv = csv::WriterBuilder::new()
+            .has_headers(true)
+            .from_writer(&mut log_zip);
+
+        csv.serialize(("Name", "Value"))?;
+
+        for (name, value) in summary {
+            csv.serialize((name.as_ref(), value.as_ref()))?;
+        }
+
+        csv.flush()?;
+
+        drop(csv);
+        drop(log_zip);
+
+        log_zip_file.flush()?;
+        log_zip_file.seek(SeekFrom::Start(0))?;
+
+        Ok(log_zip_file)
+    }
+
+    pub fn log(&mut self, record: &Record) -> bool {
+        if self.level >= record.level() {
+            if let Some(out) = self.file.as_mut() {
+                let message = format!(
+                    "[{} {} {}] {}",
+                    record.level(),
+                    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ"),
+                    record.target(),
+                    record.args()
+                );
+
+                let _ = out.write_all(message.as_bytes());
+                let _ = out.write_all(b"\n");
+
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn flush(&mut self) {
+        if let Some(out) = self.file.as_mut() {
+            let _ = out.flush();
+        }
+    }
+}
+
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum LogsView {
+    Fullscreen,
+    Hidden,
+    #[default]
+    Bottom,
+}
+
+impl LogsView {
+    pub const fn toggle(&self) -> Self {
+        match self {
+            Self::Hidden => Self::Bottom,
+            Self::Bottom => Self::Fullscreen,
+            Self::Fullscreen => Self::Hidden,
+        }
+    }
+
+    pub fn split(&self, area: Rect) -> (Rect, Rect) {
+        const EMPTY_RECT: Rect = Rect::new(0, 0, 0, 0);
+
+        match self {
+            LogsView::Hidden => (area, EMPTY_RECT),
+            LogsView::Bottom => {
+                let logs_height = area.height.min(6);
+                let main_height = (area.height as i32 - logs_height as i32).max(0) as u16;
+
+                let main_area = Rect::new(area.x, area.y, area.width, main_height);
+                let logs_area = Rect::new(area.x, area.y + main_height, area.width, logs_height);
+
+                (main_area, logs_area)
+            }
+            LogsView::Fullscreen => (EMPTY_RECT, area),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BufferedLogs {
+    pub view: LogsView,
+    pub viewport: Rect,
+
+    level: LevelFilter,
+    count: usize,
+    pub wrap: bool,
+    // Use `ratatui::Line` directly in the model for performance reasons
+    pub last_n: VecDeque<Line<'static>>,
+    last_n_len: usize,
+}
+
+impl BufferedLogs {
+    pub const fn new(view: LogsView, width: u16, height: u16) -> Self {
+        Self {
+            view,
+            viewport: Rect::new(0, 0, width, height),
+            level: LevelFilter::Info,
+            count: 0,
+            wrap: true,
+            last_n: VecDeque::new(),
+            last_n_len: 1000,
+        }
+    }
+
+    pub fn log(&mut self, record: &Record) -> bool {
+        if self.level >= record.level() {
+            let no = self.count;
+
+            let no = Span::from(format!("{:08} ", no)).on_white().black();
+
+            let level = Span::from(format!("[{}] ", record.level().as_str()));
+            let level = match record.level() {
+                log::Level::Error => level.red().bold(),
+                log::Level::Warn => level.yellow().bold(),
+                log::Level::Info => level.green(),
+                log::Level::Debug => level.blue(),
+                log::Level::Trace => level.cyan(),
+            };
+
+            let lines = format!("{}", record.args());
+
+            let mut iter = lines.lines();
+
+            if let Some(first) = iter.next() {
+                self.push(Line::from(vec![no, level, first.to_string().into()]));
+            }
+
+            for line in iter {
+                self.push(Line::from(vec![line.to_string().into()]));
+            }
+
+            !matches!(self.view, LogsView::Hidden)
+        } else {
+            false
+        }
+    }
+
+    fn push(&mut self, line: Line<'static>) {
+        if self.last_n.len() >= self.last_n_len {
+            self.last_n.pop_front();
+        }
+
+        self.last_n.push_back(line);
+        self.count += 1;
+    }
+
+    pub fn clear(&mut self) {
+        self.viewport.x = 0;
+        self.viewport.y = 0;
+
+        self.last_n.clear();
+    }
+
+    pub fn home_end_x(&mut self, home: bool) {
+        if self.wrap {
+            self.viewport.x = 0;
+            return;
+        }
+
+        if home {
+            self.viewport.x = 0;
+        } else {
+            self.viewport.x = self.max_x() as _;
+        }
+    }
+
+    pub fn scroll_x(&mut self, left: bool) {
+        if self.wrap {
+            self.viewport.x = 0;
+            return;
+        }
+
+        if left {
+            self.viewport.x = self.viewport.x.saturating_sub(1);
+        } else {
+            let max_x = self.max_x();
+
+            self.viewport.x = (self.viewport.x as u32 + 1).min(max_x) as _;
+        }
+    }
+
+    pub fn home_end_y(&mut self, home: bool) {
+        if home {
+            self.viewport.y = 0;
+        } else {
+            self.viewport.y = self.max_y() as _;
+        }
+    }
+
+    pub fn scroll_y(&mut self, up: bool) {
+        self.scroll_y_by(1, up);
+    }
+
+    pub fn page_scroll_y(&mut self, up: bool) {
+        self.scroll_y_by(self.viewport.height, up);
+    }
+
+    pub fn scroll_y_by(&mut self, height: u16, up: bool) {
+        if up {
+            self.viewport.y = self.viewport.y.saturating_sub(height);
+        } else {
+            let max_y = self.max_y();
+
+            self.viewport.y = (self.viewport.y as u32 + height as u32).min(max_y) as _;
+        }
+    }
+
+    pub fn para(&self, scroll: bool, last_n_height: u16) -> Paragraph<'static> {
+        let mut para = Paragraph::new(Text::from_iter(self.last_n.iter().map(|line| line.clone())));
+
+        if self.wrap {
+            para = para.wrap(Wrap { trim: true });
+        }
+
+        if scroll {
+            match self.view {
+                LogsView::Fullscreen => para.scroll((self.viewport.y, self.viewport.x)),
+                LogsView::Hidden => para,
+                LogsView::Bottom => {
+                    let lines_ct = para.line_count(self.viewport.width);
+                    para.scroll(((lines_ct as i32 - last_n_height as i32).max(0) as u16, 0))
+                }
+            }
+        } else {
+            para
+        }
+    }
+
+    fn max_y(&self) -> u32 {
+        let para = self.para(false, 0);
+
+        let lines_ct = para.line_count(self.viewport.width);
+
+        (lines_ct as i32 - self.viewport.height as i32).max(0) as _
+    }
+
+    fn max_x(&self) -> u32 {
+        let para = self.para(false, 0);
+
+        let line_width = para.line_width();
+
+        (line_width as i32 - self.viewport.width as i32).max(0) as _
     }
 }

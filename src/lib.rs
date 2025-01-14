@@ -4,7 +4,7 @@ use std::path::Path;
 
 use alloc::sync::Arc;
 
-use embassy_futures::select::select;
+use embassy_futures::select::select3;
 
 use embassy_sync::signal::Signal;
 use input::Input;
@@ -182,14 +182,20 @@ where
 
     let signal = Arc::new(Signal::new());
 
-    let model = Arc::new(Model::new(signal.clone()));
+    let model = Arc::new(Model::new(
+        terminal.get_frame().area().width,
+        terminal.get_frame().area().height,
+        signal.clone(),
+    ));
 
-    LOGGER.swap_signal(Some(signal));
+    LOGGER.swap_model(Some(model.clone()));
     let _guard = scopeguard::guard((), |_| {
-        LOGGER.swap_signal(None);
+        //LOGGER.swap_model(None);
     });
 
-    let result = select(
+    let input = Input::new(&model);
+
+    let result = select3(
         View::new(&model, &mut terminal).run(),
         Task::new(
             model.clone(),
@@ -199,7 +205,8 @@ where
             bundle_loader,
             bundle_logs_uploader,
         )
-        .run(&Input::new(&model)),
+        .run(&input),
+        run_log(&model, &input),
     )
     .coalesce()
     .await;
@@ -207,4 +214,60 @@ where
     ratatui::restore();
 
     result
+}
+
+async fn run_log(model: &Model, input: &Input<'_>) -> anyhow::Result<()> {
+    loop {
+        let key = input.get_log_input().await;
+
+        model.access_mut(|inner| {
+            let log = &mut inner.logs.buffered;
+
+            let notify = match Input::key_m(&key) {
+                Input::HOME => {
+                    log.home_end_x(true);
+                    true
+                }
+                Input::END => {
+                    log.home_end_x(false);
+                    true
+                }
+                Input::LEFT => {
+                    log.scroll_x(true);
+                    true
+                }
+                Input::RIGHT => {
+                    log.scroll_x(false);
+                    true
+                }
+                Input::CTL_HOME => {
+                    log.home_end_y(true);
+                    true
+                }
+                Input::CTL_END => {
+                    log.home_end_y(false);
+                    true
+                }
+                Input::PAGE_UP => {
+                    log.page_scroll_y(true);
+                    true
+                }
+                Input::PAGE_DOWN => {
+                    log.page_scroll_y(false);
+                    true
+                }
+                Input::UP => {
+                    log.scroll_y(true);
+                    true
+                }
+                Input::DOWN => {
+                    log.scroll_y(false);
+                    true
+                }
+                _ => false,
+            };
+
+            ((), notify)
+        });
+    }
 }

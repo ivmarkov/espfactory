@@ -179,7 +179,8 @@ fn run() -> anyhow::Result<()> {
 
     log::set_logger(&LOGGER).unwrap();
 
-    LOGGER.lock(|logger| logger.set_level(args.verbosity.log_level()));
+    //TODO
+    //LOGGER.lock(|logger| logger.set_level(args.verbosity.log_level()));
 
     std::env::set_var("RUST_LIB_BACKTRACE", "1");
 
