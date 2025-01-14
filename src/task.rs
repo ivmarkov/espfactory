@@ -236,10 +236,9 @@ where
             };
 
             // Step 5
-            let mut log_file = None;
-            self.model.modify(|inner| {
-                log_file = inner.logs.file.grab();
-            });
+            let log_file = self
+                .model
+                .access_mut(|inner| (inner.logs.file.grab(), true));
 
             if let Some(log_file) = log_file {
                 let log = FileLogs::finish(log_file, &summary)?;
@@ -309,7 +308,7 @@ where
         while result.is_ok() && !self.model.access(|inner| inner.state.readout().is_ready()) {
             let key = input.get_main_input().await;
 
-            self.model.access_mut(|inner| {
+            let log_line = self.model.access_mut(|inner| {
                 let readouts = inner.state.readout_mut();
 
                 let readout = &mut readouts.readouts[readouts.active];
@@ -318,34 +317,35 @@ where
                     Input::NEXT => {
                         if !readout.1.is_empty() {
                             readouts.active += 1;
-                            //info!("Readout `{}`: `{}`", readout.0, readout.1);
-                            return ((), true);
+                            return (
+                                Some(format!("Readout `{}`: `{}`", readout.0, readout.1)),
+                                true,
+                            );
                         }
                     }
                     Input::PREV => {
                         if readouts.active == 0 && readout.1.is_empty() {
                             result = Err(TaskError::Canceled);
-                            return ((), false);
+                            return (None, false);
                         }
 
                         init(readouts);
-                        //info!("Readouts reset");
-                        return ((), true);
+                        return (Some("Readouts reset".to_string()), true);
                     }
                     Input::QUIT => {
                         result = Err(TaskError::Quit);
-                        return ((), false);
+                        return (None, false);
                     }
                     (modifiers, code) => {
                         if modifiers.is_empty() {
                             match code {
                                 KeyCode::Backspace => {
                                     readout.1.pop();
-                                    return ((), true);
+                                    return (None, true);
                                 }
                                 KeyCode::Char(ch) => {
                                     readout.1.push(ch);
-                                    return ((), true);
+                                    return (None, true);
                                 }
                                 _ => (),
                             }
@@ -353,8 +353,12 @@ where
                     }
                 }
 
-                ((), false)
+                (None, false)
             });
+
+            if let Some(log_line) = log_line {
+                info!("{log_line}");
+            }
         }
 
         result
@@ -539,14 +543,16 @@ where
 
     /// Provision the bundle by flashing and optionally efusing the chip with the bundle content
     async fn prov_bundle(&mut self) -> anyhow::Result<()> {
-        self.model.modify(|inner| {
+        let bundle_name = self.model.modify(|inner| {
             let ps = inner.state.provision_mut();
             ps.provisioning = true;
 
-            info!("About to provision bundle `{}`", ps.bundle.name);
-
             ps.bundle.set_status_all(ProvisioningStatus::Pending);
+
+            ps.bundle.name.clone()
         });
+
+        info!("About to provision bundle `{bundle_name}`");
 
         let (chip, flash_size, keys, mut flash_data) = self.model.access(|inner| {
             let ps = inner.state.provision();
@@ -688,16 +694,13 @@ where
         }
 
         self.model.modify(|inner| {
-            info!(
-                "Provisioning bundle `{}` complete",
-                inner.state.provision().bundle.name
-            );
-
             inner.state.success(
                 format!(" {} ", inner.state.provision().bundle.name),
                 "Provisioning complete.",
             );
         });
+
+        info!("Provisioning bundle `{bundle_name}` complete");
 
         Ok(())
     }

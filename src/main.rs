@@ -179,14 +179,12 @@ fn run() -> anyhow::Result<()> {
 
     log::set_logger(&LOGGER).unwrap();
 
-    //TODO
-    //LOGGER.lock(|logger| logger.set_level(args.verbosity.log_level()));
-
     std::env::set_var("RUST_LIB_BACKTRACE", "1");
 
     futures_lite::future::block_on(
         espfactory::run(
             &conf.config,
+            args.verbosity.log_level(),
             bundle_dir,
             base_loader,
             loader,

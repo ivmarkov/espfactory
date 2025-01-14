@@ -32,22 +32,19 @@ pub struct Model {
     /// A signal to notify that the model has changed
     /// Used to trigger redraws of the UI
     changed: Arc<Signal<CriticalSectionRawMutex, ()>>,
-    pub main_input_changed: Signal<CriticalSectionRawMutex, ()>,
-    pub log_input_changed: Signal<CriticalSectionRawMutex, ()>,
 }
 
 impl Model {
     /// Create a new model in the initial state (readouts)
     pub const fn new(
+        level: LevelFilter,
         width: u16,
         height: u16,
         changed: Arc<Signal<CriticalSectionRawMutex, ()>>,
     ) -> Self {
         Self {
-            state: Mutex::new(RefCell::new(ModelInner::new(width, height))),
+            state: Mutex::new(RefCell::new(ModelInner::new(level, width, height))),
             changed,
-            main_input_changed: Signal::new(),
-            log_input_changed: Signal::new(),
         }
     }
 
@@ -92,14 +89,6 @@ impl Model {
     pub async fn wait_changed(&self) {
         self.changed.wait().await;
     }
-
-    pub async fn wait_main_input_changed(&self) {
-        self.main_input_changed.wait().await;
-    }
-
-    pub async fn wait_log_input_changed(&self) {
-        self.log_input_changed.wait().await;
-    }
 }
 
 #[derive(Debug)]
@@ -109,10 +98,10 @@ pub struct ModelInner {
 }
 
 impl ModelInner {
-    pub const fn new(width: u16, height: u16) -> Self {
+    pub const fn new(level: LevelFilter, width: u16, height: u16) -> Self {
         Self {
             state: State::new(),
-            logs: Logs::new(LogsView::Bottom, width, height),
+            logs: Logs::new(level, BufferedLogsLayout::Bottom, width, height),
         }
     }
 }
@@ -329,10 +318,15 @@ pub struct Logs {
 }
 
 impl Logs {
-    pub const fn new(view: LogsView, width: u16, height: u16) -> Self {
+    pub const fn new(
+        level: LevelFilter,
+        layout: BufferedLogsLayout,
+        width: u16,
+        height: u16,
+    ) -> Self {
         Self {
-            file: FileLogs::new(),
-            buffered: BufferedLogs::new(view, width, height),
+            file: FileLogs::new(level),
+            buffered: BufferedLogs::new(level, 1000, layout, width, height),
         }
     }
 
@@ -355,11 +349,8 @@ pub struct FileLogs {
 }
 
 impl FileLogs {
-    pub const fn new() -> Self {
-        Self {
-            level: LevelFilter::Info,
-            file: None,
-        }
+    pub const fn new(level: LevelFilter) -> Self {
+        Self { level, file: None }
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
@@ -443,14 +434,14 @@ impl FileLogs {
 }
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
-pub enum LogsView {
+pub enum BufferedLogsLayout {
     Fullscreen,
     Hidden,
     #[default]
     Bottom,
 }
 
-impl LogsView {
+impl BufferedLogsLayout {
     pub const fn toggle(&self) -> Self {
         match self {
             Self::Hidden => Self::Bottom,
@@ -463,8 +454,8 @@ impl LogsView {
         const EMPTY_RECT: Rect = Rect::new(0, 0, 0, 0);
 
         match self {
-            LogsView::Hidden => (area, EMPTY_RECT),
-            LogsView::Bottom => {
+            BufferedLogsLayout::Hidden => (area, EMPTY_RECT),
+            BufferedLogsLayout::Bottom => {
                 let logs_height = area.height.min(6);
                 let main_height = (area.height as i32 - logs_height as i32).max(0) as u16;
 
@@ -473,35 +464,66 @@ impl LogsView {
 
                 (main_area, logs_area)
             }
-            LogsView::Fullscreen => (EMPTY_RECT, area),
+            BufferedLogsLayout::Fullscreen => (EMPTY_RECT, area),
         }
     }
 }
 
 #[derive(Debug)]
 pub struct BufferedLogs {
-    pub view: LogsView,
-    pub viewport: Rect,
-
+    layout: BufferedLogsLayout,
+    viewport: Rect,
+    wrap: bool,
     level: LevelFilter,
     count: usize,
-    pub wrap: bool,
     // Use `ratatui::Line` directly in the model for performance reasons
-    pub last_n: VecDeque<Line<'static>>,
-    last_n_len: usize,
+    buffer: VecDeque<Line<'static>>,
+    buffer_len: usize,
 }
 
 impl BufferedLogs {
-    pub const fn new(view: LogsView, width: u16, height: u16) -> Self {
+    pub const fn new(
+        level: LevelFilter,
+        buffer_len: usize,
+        view: BufferedLogsLayout,
+        width: u16,
+        height: u16,
+    ) -> Self {
         Self {
-            view,
+            layout: view,
             viewport: Rect::new(0, 0, width, height),
-            level: LevelFilter::Info,
+            level,
             count: 0,
             wrap: true,
-            last_n: VecDeque::new(),
-            last_n_len: 1000,
+            buffer: VecDeque::new(),
+            buffer_len,
         }
+    }
+
+    pub fn set_size(&mut self, width: u16, height: u16) {
+        self.viewport.width = width;
+        self.viewport.height = height;
+    }
+
+    pub const fn layout(&self) -> BufferedLogsLayout {
+        self.layout
+    }
+
+    pub fn toggle_layout(&mut self) {
+        self.layout = self.layout.toggle();
+
+        if matches!(self.layout, BufferedLogsLayout::Fullscreen) {
+            self.home_end_y(false);
+        }
+    }
+
+    pub const fn is_wrap(&self) -> bool {
+        self.wrap
+    }
+
+    pub fn toggle_wrap(&mut self) {
+        self.wrap = !self.wrap;
+        self.viewport.x = 0;
     }
 
     pub fn log(&mut self, record: &Record) -> bool {
@@ -531,18 +553,18 @@ impl BufferedLogs {
                 self.push(Line::from(vec![line.to_string().into()]));
             }
 
-            !matches!(self.view, LogsView::Hidden)
+            !matches!(self.layout, BufferedLogsLayout::Hidden)
         } else {
             false
         }
     }
 
     fn push(&mut self, line: Line<'static>) {
-        if self.last_n.len() >= self.last_n_len {
-            self.last_n.pop_front();
+        if self.buffer.len() >= self.buffer_len {
+            self.buffer.pop_front();
         }
 
-        self.last_n.push_back(line);
+        self.buffer.push_back(line);
         self.count += 1;
     }
 
@@ -550,7 +572,7 @@ impl BufferedLogs {
         self.viewport.x = 0;
         self.viewport.y = 0;
 
-        self.last_n.clear();
+        self.buffer.clear();
     }
 
     pub fn home_end_x(&mut self, home: bool) {
@@ -608,17 +630,17 @@ impl BufferedLogs {
     }
 
     pub fn para(&self, scroll: bool, last_n_height: u16) -> Paragraph<'static> {
-        let mut para = Paragraph::new(Text::from_iter(self.last_n.iter().map(|line| line.clone())));
+        let mut para = Paragraph::new(Text::from_iter(self.buffer.iter().cloned()));
 
         if self.wrap {
             para = para.wrap(Wrap { trim: true });
         }
 
         if scroll {
-            match self.view {
-                LogsView::Fullscreen => para.scroll((self.viewport.y, self.viewport.x)),
-                LogsView::Hidden => para,
-                LogsView::Bottom => {
+            match self.layout {
+                BufferedLogsLayout::Fullscreen => para.scroll((self.viewport.y, self.viewport.x)),
+                BufferedLogsLayout::Hidden => para,
+                BufferedLogsLayout::Bottom => {
                     let lines_ct = para.line_count(self.viewport.width);
                     para.scroll(((lines_ct as i32 - last_n_height as i32).max(0) as u16, 0))
                 }

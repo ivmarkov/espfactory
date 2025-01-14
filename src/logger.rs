@@ -19,17 +19,19 @@ pub static LOGGER: Logger = Logger::new();
 /// - Signals when a log message has been written
 pub struct Logger(Mutex<Option<Arc<Model>>>);
 
+impl Default for Logger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Logger {
     /// Create a new `Logger`
-    ///
-    /// # Arguments
-    /// - `level` - the log level to use overall (for writing to the file as well as for keeping in memory)
-    /// - `last_n_level` - the log level to use for keeping the last N log lines in memory (should be higher or equal to the overall log level)
-    /// - `last_n_len` - the number of last N log lines to keep in memory
     pub const fn new() -> Self {
         Self(Mutex::new(None))
     }
 
+    /// Swap the current model in the logger (if any) with a new one or `None`
     pub fn swap_model(&self, model: Option<Arc<Model>>) -> Option<Arc<Model>> {
         let mut guard = self.0.lock().unwrap();
 

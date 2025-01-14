@@ -11,7 +11,8 @@ use ratatui::DefaultTerminal;
 
 use crate::bundle::{Bundle, Efuse, ProvisioningStatus};
 use crate::model::{
-    BufferedLogs, Logs, Model, ModelInner, Processing, Provision, Readout, State, Status,
+    BufferedLogs, BufferedLogsLayout, Logs, Model, ModelInner, Processing, Provision, Readout,
+    State, Status,
 };
 
 /// The view (UI) of the application
@@ -45,7 +46,7 @@ impl<'a, 'b> View<'a, 'b> {
 
 impl Widget for &ModelInner {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let (main_area, logs_area) = self.logs.buffered.view.split(area);
+        let (main_area, logs_area) = self.logs.buffered.layout().split(area);
 
         if main_area.width > 0 && main_area.height > 0 {
             self.state.render(main_area, buf);
@@ -461,7 +462,30 @@ impl Widget for &Logs {
 
 impl Widget for &BufferedLogs {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        self.para(true, area.height).render(area, buf);
+        if matches!(self.layout(), BufferedLogsLayout::Fullscreen) {
+            let layout = Layout::new(
+                Direction::Vertical,
+                [Constraint::Length(1), Constraint::Percentage(100)],
+            )
+            .split(area);
+
+            Line::from(vec![
+                "Navigate ".into(),
+                "<Arrow/Page/Home/End Keys>".yellow().bold(),
+                " Main ".into(),
+                "<Alt-L>".yellow().bold(),
+                " Wrap ".into(),
+                "<Alt-W>".yellow().bold(),
+            ])
+            .black()
+            .on_white()
+            .right_aligned()
+            .render(layout[0], buf);
+
+            self.para(true, layout[1].height).render(layout[1], buf);
+        } else {
+            self.para(true, area.height).render(area, buf);
+        }
     }
 }
 
@@ -526,11 +550,8 @@ impl Keys {
                 instructions.push("<Esc>".yellow().bold());
             }
 
-            instructions.push(" Toggle Logs ".into());
+            instructions.push(" Logs ".into());
             instructions.push("<Alt-L>".yellow().bold());
-
-            instructions.push(" Wrap Logs ".into());
-            instructions.push("<Alt-W>".yellow().bold());
 
             if self.contains(Self::QUIT) {
                 instructions.push(" Quit ".into());

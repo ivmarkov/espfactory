@@ -8,10 +8,11 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, RawMutex};
 use embassy_sync::channel::Channel;
 
-use crate::model::{LogsView, Model};
+use crate::model::{BufferedLogsLayout, Model};
 
 extern crate alloc;
 
+/// The outcome of a user confirmation of a step in the main dialogue
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ConfirmOutcome {
     Confirmed,
@@ -22,6 +23,8 @@ pub enum ConfirmOutcome {
 /// A helper for procressing input events from the terminal
 pub struct Input<'a> {
     model: &'a Model,
+    input_changed_main: Signal<CriticalSectionRawMutex, ()>,
+    input_changed_log: Signal<CriticalSectionRawMutex, ()>,
     pump: EventsPump,
 }
 
@@ -45,14 +48,18 @@ impl<'a> Input<'a> {
     pub const WRAP_LOG: (KeyModifiers, KeyCode) = (KeyModifiers::ALT, KeyCode::Char('w'));
 
     /// Creates a new `Input` instance with the given model
-    ///
-    /// The model is necessary only so that the input can automatically trigger redraws on terminal resize events
     pub fn new(model: &'a Model) -> Self {
         Self {
             model,
+            input_changed_main: Signal::new(),
+            input_changed_log: Signal::new(),
             pump: EventsPump::new(),
         }
     }
+
+    //
+    // Methods related to main input
+    //
 
     /// Waits for the user to:
     /// - Go back to the previous step with `Esc`
@@ -89,20 +96,33 @@ impl<'a> Input<'a> {
         }
     }
 
+    /// Gets the next key press event in case the main input is active
+    /// Waits until the main input is activated otherwise
     pub async fn get_main_input(&self) -> KeyEvent {
-        self.get(true, &self.model.main_input_changed).await
+        self.get(true, &self.input_changed_main).await
     }
 
+    //
+    // Log input methods
+    //
+
+    /// Gets the next key press event in case the log input is active
+    /// Waits until the log input is activated otherwise
     pub async fn get_log_input(&self) -> KeyEvent {
-        self.get(false, &self.model.log_input_changed).await
+        self.get(false, &self.input_changed_log).await
     }
 
+    //
+    // Utils
+    //
+
+    /// Gets the next key press event either for the main input or for the log input
+    /// depending on the value of the `main` parameter
     async fn get(&self, main: bool, signal: &Signal<impl RawMutex, ()>) -> KeyEvent {
         loop {
-            if self
-                .model
-                .access(|inner| main == !matches!(inner.logs.buffered.view, LogsView::Fullscreen))
-            {
+            if self.model.access(|inner| {
+                main != matches!(inner.logs.buffered.layout(), BufferedLogsLayout::Fullscreen)
+            }) {
                 if let Either::Second(key) = select(signal.wait(), self.get_any()).await {
                     return key;
                 }
@@ -127,18 +147,13 @@ impl<'a> Input<'a> {
                             let buffered = &mut inner.logs.buffered;
 
                             if Self::key_m(&key) == Self::TOGGLE_LOG {
-                                buffered.view = buffered.view.toggle();
-
-                                if matches!(buffered.view, LogsView::Fullscreen) {
-                                    buffered.home_end_y(false);
-                                }
+                                buffered.toggle_layout();
                             } else {
-                                buffered.wrap = !buffered.wrap;
-                                buffered.viewport.x = 0;
+                                buffered.toggle_wrap();
                             }
 
-                            self.model.main_input_changed.signal(());
-                            self.model.log_input_changed.signal(());
+                            self.input_changed_main.signal(());
+                            self.input_changed_log.signal(());
                         });
                     } else {
                         return key;
@@ -147,9 +162,7 @@ impl<'a> Input<'a> {
                 // Fake a dirty model to force redraw on resize
                 Event::Resize(width, height) => self.model.modify(|inner| {
                     let buffered = &mut inner.logs.buffered;
-
-                    buffered.viewport.width = width;
-                    buffered.viewport.height = height;
+                    buffered.set_size(width, height);
                 }),
                 _ => {}
             }

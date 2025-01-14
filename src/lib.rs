@@ -159,6 +159,7 @@ pub enum BundleIdentification {
 ///
 /// # Arguments
 /// - `conf` - The configuration of the factory
+/// - `level` - The log level to use
 /// - `bundle_dir` - The directory where a loaded bundle is temporarily stored for processing
 /// - `bundle_base_loader` - An optional loader used to load the base bundle; the base bundle (if used)
 ///   usually contains the device-independent payloads like the bootloader, the partition image
@@ -168,6 +169,7 @@ pub enum BundleIdentification {
 /// - `bundle_logs_uploader` - The uploader used to upload the logs from the device provisioning to the server
 pub async fn run<B, L, U>(
     conf: &Config,
+    level: log::LevelFilter,
     bundle_dir: &Path,
     bundle_base_loader: Option<B>,
     bundle_loader: L,
@@ -183,6 +185,7 @@ where
     let signal = Arc::new(Signal::new());
 
     let model = Arc::new(Model::new(
+        level,
         terminal.get_frame().area().width,
         terminal.get_frame().area().height,
         signal.clone(),
@@ -190,7 +193,7 @@ where
 
     LOGGER.swap_model(Some(model.clone()));
     let _guard = scopeguard::guard((), |_| {
-        //LOGGER.swap_model(None);
+        LOGGER.swap_model(None);
     });
 
     let input = Input::new(&model);
