@@ -16,7 +16,7 @@ use embassy_time::{Duration, Ticker};
 
 use espflash::flasher::ProgressCallbacks;
 
-use log::{error, info};
+use log::{error, info, warn};
 
 use tempfile::NamedTempFile;
 
@@ -176,6 +176,11 @@ where
                         for (name, value) in &readout.readouts {
                             summary.push((name.clone(), value.clone()));
                         }
+
+                        if !self.conf.test_jig_id_readout && !self.conf.test_jig_id.is_empty() {
+                            summary
+                                .push(("Test JIG ID".to_string(), self.conf.test_jig_id.clone()));
+                        }
                     });
 
                     break loop {
@@ -292,6 +297,17 @@ where
     /// Process the readouts state by visualizing the eFuse readouts (if any) and
     /// reading the necessary IDs from the user (if any)
     async fn step2_readout(&mut self, mut input: impl TaskInput) -> Result<(), TaskError> {
+        if !self.conf.test_jig_id.is_empty() {
+            if self.conf.test_jig_id_readout {
+                warn!(
+                    "Ignoring the fixed value `{}` for the Test JIG ID from the configuration",
+                    self.conf.test_jig_id
+                );
+            } else {
+                info!("Readout `Test JIG ID`: `{}`", self.conf.test_jig_id);
+            }
+        }
+
         let init = |readouts: &mut Readout| {
             readouts.readouts.clear();
             readouts.active = 0;

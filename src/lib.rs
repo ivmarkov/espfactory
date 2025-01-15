@@ -74,9 +74,16 @@ pub struct Config {
     /// The method used to identify the bundle to be loaded
     #[serde(default)]
     pub bundle_identification: BundleIdentification,
-    /// Whether to render a UI for reading the test jig ID
+    /// Instead of reading the Test JIG ID, hard-code its value here.
     ///
-    /// The test jig Id is only read and used for logging purposes
+    /// The test JIG ID is used for logging purposes.
+    ///
+    /// NOTE: If `test_jig_id_readout` is `true`, this value will be ignored.
+    #[serde(default)]
+    pub test_jig_id: String,
+    /// Whether to render a UI for reading the test JIG ID
+    ///
+    /// The test JIG ID is only read and used for logging purposes
     #[serde(default)]
     pub test_jig_id_readout: bool,
     /// Whether to render a UI for reading the PCB ID
@@ -130,6 +137,7 @@ impl Config {
             flash_speed: None,
             efuse_speed: None,
             bundle_identification: BundleIdentification::None,
+            test_jig_id: String::new(),
             test_jig_id_readout: false,
             pcb_id_readout: false,
             device_id_readout: false,
