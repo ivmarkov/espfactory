@@ -85,12 +85,12 @@ pub struct Config {
     /// it is used to identify the bundle to be loaded
     #[serde(default)]
     pub pcb_id_readout: bool,
-    /// Whether to render a UI for reading the box ID
+    /// Whether to render a UI for reading the Device ID
     ///
-    /// The box ID is used for logging purposes, but also and if the `BundleIdentification::BoxId` is used
+    /// The Device ID is used for logging purposes, but also and if the `BundleIdentification::DeviceId` is used
     /// it is used to identify the bundle to be loaded
     #[serde(default)]
-    pub box_id_readout: bool,
+    pub device_id_readout: bool,
     /// Whether to skip all confirmation screens
     #[serde(default)]
     pub skip_confirmations: bool,
@@ -132,7 +132,7 @@ impl Config {
             bundle_identification: BundleIdentification::None,
             test_jig_id_readout: false,
             pcb_id_readout: false,
-            box_id_readout: false,
+            device_id_readout: false,
             skip_confirmations: false,
             supply_default_partition_table: true,
             supply_default_bootloader: true,
@@ -169,7 +169,7 @@ pub enum BundleIdentification {
     /// Use the PCB ID as the bundle ID
     PcbId,
     /// Use the Device ID as the bundle ID
-    BoxId,
+    DeviceId,
 }
 
 /// Run the factory
