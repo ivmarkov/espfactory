@@ -5,8 +5,6 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write as _};
 
-use alloc::sync::Arc;
-
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
@@ -31,20 +29,20 @@ pub struct Model {
     state: Mutex<CriticalSectionRawMutex, RefCell<ModelInner>>, // TODO: Change to std::sync::Mutex?
     /// A signal to notify that the model has changed
     /// Used to trigger redraws of the UI
-    changed: Arc<Signal<CriticalSectionRawMutex, ()>>,
+    changed: Signal<CriticalSectionRawMutex, ()>,
 }
 
 impl Model {
     /// Create a new model in the initial state (readouts)
-    pub const fn new(
-        level: LevelFilter,
-        width: u16,
-        height: u16,
-        changed: Arc<Signal<CriticalSectionRawMutex, ()>>,
-    ) -> Self {
+    ///
+    /// Arguments:
+    /// - `level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `width`: The initial width of the screen (necessary for proper paging in the on-screen logs)
+    /// - `height`: The initial height of the screen (necessary for proper paging in the on-screen logs)
+    pub const fn new(level: LevelFilter, width: u16, height: u16) -> Self {
         Self {
             state: Mutex::new(RefCell::new(ModelInner::new(level, width, height))),
-            changed,
+            changed: Signal::new(),
         }
     }
 
@@ -55,14 +53,6 @@ impl Model {
     {
         self.state
             .lock(|inner: &RefCell<ModelInner>| f(&inner.borrow()))
-    }
-
-    /// Modify the state of the model by applying the given closure to it
-    pub fn modify<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut ModelInner) -> R,
-    {
-        self.access_mut(|inner| (f(inner), true))
     }
 
     /// Accwess the state of the model by applying the given closure to it
@@ -84,6 +74,14 @@ impl Model {
         })
     }
 
+    /// Modify the state of the model by applying the given closure to it
+    pub fn modify<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut ModelInner) -> R,
+    {
+        self.access_mut(|inner| (f(inner), true))
+    }
+
     /// Wait for the model to change
     /// The UI is expected to call this method to wait for the model to change before redrawing
     pub async fn wait_changed(&self) {
@@ -91,13 +89,23 @@ impl Model {
     }
 }
 
+/// The inner state of the model, accessible in the closures passed to
+/// `Model::access`, `Model::access_mut` and `Model::modify`.
 #[derive(Debug)]
 pub struct ModelInner {
+    /// The state of the model (i.e. awating readouts, displaying an error, preparing the bundle, flashing it etc. etc.)
     pub state: State,
+    /// The logs' state of the model (i.e. whether the logs are active, the position inside the logs etc. etc.)
     pub logs: Logs,
 }
 
 impl ModelInner {
+    /// Create a new model in the initial state (readouts)
+    ///
+    /// Arguments:
+    /// - `level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `width`: The initial width of the screen (necessary for proper paging in the on-screen logs)
+    /// - `height`: The initial height of the screen (necessary for proper paging in the on-screen logs)
     pub const fn new(level: LevelFilter, width: u16, height: u16) -> Self {
         Self {
             state: State::new(),
@@ -287,16 +295,21 @@ impl Processing {
 /// The status message is either an error or a success message
 #[derive(Debug)]
 pub struct Status {
+    /// The title of the status message
     pub title: String,
+    /// The message of the status
     pub message: String,
+    /// Whether the status is an error
     pub error: bool,
 }
 
 impl Status {
+    /// Create a new "success" `Status` state with the given title and message
     pub fn success(title: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(title, message, false)
     }
 
+    /// Create a new "error" `Status` state with the given title and message
     pub fn error(title: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(title, message, true)
     }
@@ -311,13 +324,23 @@ impl Status {
     }
 }
 
+/// The logs of the model
 #[derive(Debug)]
 pub struct Logs {
+    /// File logs
     pub file: FileLogs,
+    /// Buffered (on-screen) logs
     pub buffered: BufferedLogs,
 }
 
 impl Logs {
+    /// Create a new `Logs` state with the given log level, layout, width and height
+    ///
+    /// Arguments:
+    /// - `level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `layout`: The initial layout of the on-screen logs (i.e. fullscreen, hidden or bottom)
+    /// - `width`: The initial width of the screen (necessary for proper paging in the on-screen logs)
+    /// - `height`: The initial height of the screen (necessary for proper paging in the on-screen logs)
     pub const fn new(
         level: LevelFilter,
         layout: BufferedLogsLayout,
@@ -330,29 +353,43 @@ impl Logs {
         }
     }
 
+    /// Clear the logs state
+    ///
+    /// To be called when a new PCB is to be provisioned
     pub fn clear(&mut self) -> anyhow::Result<()> {
         self.file.start()?;
-        //TODO self.buffered.clear();
+        self.buffered.clear();
 
         Ok(())
     }
 
+    /// Take the file of the file logs
+    ///
+    /// To be called at the end of the PCB provisioning, when file logs are to be uploaded
     pub fn take(&mut self) -> Option<File> {
         self.file.grab()
     }
 }
 
+/// The file logs of the model
 #[derive(Debug)]
 pub struct FileLogs {
-    pub level: LevelFilter,
-    pub file: Option<File>,
+    /// The log level of the file logs
+    level: LevelFilter,
+    /// The file to write the logs to
+    file: Option<File>,
 }
 
 impl FileLogs {
+    /// Create a new `FileLogs` state with no log file
+    ///
+    /// Arguments:
+    /// - `level`: The log level of the model (for file logging)
     pub const fn new(level: LevelFilter) -> Self {
         Self { level, file: None }
     }
 
+    /// Start the file logs
     fn start(&mut self) -> anyhow::Result<()> {
         let log = tempfile()?;
 
@@ -361,10 +398,15 @@ impl FileLogs {
         Ok(())
     }
 
+    /// Take the file of the file logs, if any
     pub fn grab(&mut self) -> Option<File> {
         self.file.take()
     }
 
+    /// Utility to finish the file logs
+    ///
+    /// Finishing the file logs means flushing the logs to the file and creating
+    /// a ZIP file with the logs and a small summary csv
     pub fn finish<'i, I, S>(mut log: File, summary: I) -> anyhow::Result<impl Read + Seek>
     where
         I: IntoIterator<Item = &'i (S, S)>,
@@ -405,6 +447,7 @@ impl FileLogs {
         Ok(log_zip_file)
     }
 
+    /// Log a record to the file logs
     pub fn log(&mut self, record: &Record) -> bool {
         if self.level >= record.level() {
             if let Some(out) = self.file.as_mut() {
@@ -426,6 +469,7 @@ impl FileLogs {
         false
     }
 
+    /// Flush the file logs
     pub fn flush(&mut self) {
         if let Some(out) = self.file.as_mut() {
             let _ = out.flush();
@@ -433,15 +477,20 @@ impl FileLogs {
     }
 }
 
+/// The layout of the on-screen logs
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum BufferedLogsLayout {
+    /// The logs are fullscreen
     Fullscreen,
+    /// The logs are hidden
     Hidden,
+    /// The logs occupy N fixed lines at the bottom of the screen
     #[default]
     Bottom,
 }
 
 impl BufferedLogsLayout {
+    /// Toggle the layout between hidden, bottom and fullscreen
     pub const fn toggle(&self) -> Self {
         match self {
             Self::Hidden => Self::Bottom,
@@ -450,6 +499,8 @@ impl BufferedLogsLayout {
         }
     }
 
+    /// Utility to calculate the split of the screen between the main area and the logs area
+    /// depending on the layout
     pub fn split(&self, area: Rect) -> (Rect, Rect) {
         const EMPTY_RECT: Rect = Rect::new(0, 0, 0, 0);
 
@@ -469,19 +520,37 @@ impl BufferedLogsLayout {
     }
 }
 
+/// The buffered (on-screen) logs of the model
 #[derive(Debug)]
 pub struct BufferedLogs {
+    /// The layout of the on-screen logs
     layout: BufferedLogsLayout,
+    /// The viewport of the on-screen logs (current position inside the logs buffer as well as current
+    /// screen size known to the model - for correct paging through the logs)
     viewport: Rect,
+    /// Whether the logs are wrapped when displayed
     wrap: bool,
+    /// The log level of the on-screen logs
     level: LevelFilter,
+    /// The number of log lines sent to the on-screen logs buffer from the beginning of the program
+    /// (used to number the log lines)
     count: usize,
-    // Use `ratatui::Line` directly in the model for performance reasons
+    /// The buffer of the on-screen logs. Keeps the last N log lines
+    /// Uses `ratatui::Line` directly in the model for performance reasons
     buffer: VecDeque<Line<'static>>,
+    /// The maximum number of log lines to keep in the buffer
     buffer_len: usize,
 }
 
 impl BufferedLogs {
+    /// Create a new `BufferedLogs` state with the given log level, layout, width and height
+    ///
+    /// Arguments:
+    /// - `level`: The log level of the model (for on-screen logging)
+    /// - `buffer_len`: The maximum number of log lines to keep in the buffer
+    /// - `view`: The initial layout of the on-screen logs (i.e. fullscreen, hidden or bottom)
+    /// - `width`: The initial width of the screen (necessary for proper paging in the on-screen logs)
+    /// - `height`: The initial height of the screen (necessary for proper paging in the on-screen logs)
     pub const fn new(
         level: LevelFilter,
         buffer_len: usize,
@@ -500,15 +569,18 @@ impl BufferedLogs {
         }
     }
 
+    /// Ipdate the model with the last know screen size (for proper paging through the logs)
     pub fn set_size(&mut self, width: u16, height: u16) {
         self.viewport.width = width;
         self.viewport.height = height;
     }
 
+    /// Get the layout of the on-screen logs
     pub const fn layout(&self) -> BufferedLogsLayout {
         self.layout
     }
 
+    /// Toggle the layout of the on-screen logs between hidden, bottom and fullscreen
     pub fn toggle_layout(&mut self) {
         self.layout = self.layout.toggle();
 
@@ -517,15 +589,18 @@ impl BufferedLogs {
         }
     }
 
+    /// Get the wrap setting of the on-screen logs
     pub const fn is_wrap(&self) -> bool {
         self.wrap
     }
 
+    /// Toggle the wrap setting of the on-screen logs
     pub fn toggle_wrap(&mut self) {
         self.wrap = !self.wrap;
         self.viewport.x = 0;
     }
 
+    /// Log a record to the on-screen logs
     pub fn log(&mut self, record: &Record) -> bool {
         if self.level >= record.level() {
             let no = self.count;
@@ -559,6 +634,7 @@ impl BufferedLogs {
         }
     }
 
+    /// Push a log line to the on-screen logs buffer, removing the oldest line if necessary
     fn push(&mut self, line: Line<'static>) {
         if self.buffer.len() >= self.buffer_len {
             self.buffer.pop_front();
@@ -568,6 +644,7 @@ impl BufferedLogs {
         self.count += 1;
     }
 
+    /// Clear the on-screen logs buffer
     pub fn clear(&mut self) {
         self.viewport.x = 0;
         self.viewport.y = 0;
@@ -575,6 +652,7 @@ impl BufferedLogs {
         self.buffer.clear();
     }
 
+    /// Move the viewport to the beginning or the end of the on-screen logs by the X axis
     pub fn home_end_x(&mut self, home: bool) {
         if self.wrap {
             self.viewport.x = 0;
@@ -588,6 +666,7 @@ impl BufferedLogs {
         }
     }
 
+    /// Scroll the viewport by one column to the left or to the right
     pub fn scroll_x(&mut self, left: bool) {
         if self.wrap {
             self.viewport.x = 0;
@@ -603,6 +682,7 @@ impl BufferedLogs {
         }
     }
 
+    /// Move the viewport to the beginning or the end of the on-screen logs by the Y axis
     pub fn home_end_y(&mut self, home: bool) {
         if home {
             self.viewport.y = 0;
@@ -611,14 +691,17 @@ impl BufferedLogs {
         }
     }
 
+    /// Scroll the viewport by one line up or down
     pub fn scroll_y(&mut self, up: bool) {
         self.scroll_y_by(1, up);
     }
 
+    /// Scroll the viewport by one page up or down
     pub fn page_scroll_y(&mut self, up: bool) {
         self.scroll_y_by(self.viewport.height, up);
     }
 
+    /// Scroll the viewport by the given height up or down
     pub fn scroll_y_by(&mut self, height: u16, up: bool) {
         if up {
             self.viewport.y = self.viewport.y.saturating_sub(height);
@@ -629,6 +712,7 @@ impl BufferedLogs {
         }
     }
 
+    /// Get the on-screen logs as a `Paragraph` widget, ready for rendering
     pub fn para(&self, scroll: bool, last_n_height: u16) -> Paragraph<'static> {
         let mut para = Paragraph::new(Text::from_iter(self.buffer.iter().cloned()));
 
@@ -650,6 +734,7 @@ impl BufferedLogs {
         }
     }
 
+    /// Get the maximum meaningful Y position of the viewport
     fn max_y(&self) -> u32 {
         let para = self.para(false, 0);
 
@@ -658,6 +743,7 @@ impl BufferedLogs {
         (lines_ct as i32 - self.viewport.height as i32).max(0) as _
     }
 
+    /// Get the maximum meaningful X position of the viewport
     fn max_x(&self) -> u32 {
         let para = self.para(false, 0);
 

@@ -1,12 +1,10 @@
 #![allow(async_fn_in_trait)]
-
 use std::path::Path;
 
 use alloc::sync::Arc;
 
 use embassy_futures::select::select3;
 
-use embassy_sync::signal::Signal;
 use input::Input;
 use model::Model;
 use serde::{Deserialize, Serialize};
@@ -182,13 +180,10 @@ where
 {
     let mut terminal = ratatui::init();
 
-    let signal = Arc::new(Signal::new());
-
     let model = Arc::new(Model::new(
         level,
         terminal.get_frame().area().width,
         terminal.get_frame().area().height,
-        signal.clone(),
     ));
 
     LOGGER.swap_model(Some(model.clone()));
@@ -219,6 +214,7 @@ where
     result
 }
 
+/// Run the interaction with the logs view
 async fn run_log(model: &Model, input: &Input<'_>) -> anyhow::Result<()> {
     loop {
         let key = input.get_log_input().await;
