@@ -1,16 +1,18 @@
 #![allow(async_fn_in_trait)]
+
 use std::path::Path;
 
 use alloc::sync::Arc;
 
 use embassy_futures::select::select3;
 
-use input::Input;
+use input::{LogInput, LogInputOutcome};
 use model::Model;
 use serde::{Deserialize, Serialize};
 use task::Task;
+use ui::input::Input;
+use ui::view::View;
 use utils::futures::Coalesce;
-use view::View;
 
 pub use logger::LOGGER;
 
@@ -26,8 +28,8 @@ mod input;
 mod logger;
 mod model;
 mod task;
+mod ui;
 mod utils;
-mod view;
 
 /// The configuration of the factory
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -102,6 +104,16 @@ pub struct Config {
     /// during the bundles' merge operation
     #[serde(default)]
     pub overwrite_on_merge: bool,
+    /// Whether to print stack backtraces in the error messages and in the logs
+    #[serde(default)]
+    pub print_backtraces: bool,
+    /// Whether to run the app without the interactive console UI
+    #[serde(default)]
+    no_ui: bool,
+    /// Only relevant with the interactive console UI:
+    /// The length of the log buffer
+    #[serde(default = "default_usize::<1000>")]
+    log_buffer_len: usize,
 }
 
 impl Config {
@@ -125,6 +137,9 @@ impl Config {
             supply_default_partition_table: true,
             supply_default_bootloader: true,
             overwrite_on_merge: false,
+            print_backtraces: false,
+            no_ui: false,
+            log_buffer_len: 1000,
         }
     }
 }
@@ -139,6 +154,10 @@ const fn default_bool<const V: bool>() -> bool {
     V
 }
 
+const fn default_usize<const V: usize>() -> usize {
+    V
+}
+
 /// The identification method used to identify a bundle to be loaded.
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum BundleIdentification {
@@ -149,7 +168,7 @@ pub enum BundleIdentification {
     None,
     /// Use the PCB ID as the bundle ID
     PcbId,
-    /// Use the DEVICE box ID as the bundle ID
+    /// Use the Device ID as the bundle ID
     BoxId,
 }
 
@@ -158,7 +177,6 @@ pub enum BundleIdentification {
 /// # Arguments
 /// - `conf` - The configuration of the factory
 /// - `log_level` - The log level to use
-/// - `log_buffer_len` - The length of the log buffer
 /// - `bundle_dir` - The directory where a loaded bundle is temporarily stored for processing
 /// - `bundle_base_loader` - An optional loader used to load the base bundle; the base bundle (if used)
 ///   usually contains the device-independent payloads like the bootloader, the partition image
@@ -169,7 +187,6 @@ pub enum BundleIdentification {
 pub async fn run<B, L, U>(
     conf: &Config,
     log_level: log::LevelFilter,
-    log_buffer_len: usize,
     bundle_dir: &Path,
     bundle_base_loader: Option<B>,
     bundle_loader: L,
@@ -180,13 +197,21 @@ where
     L: loader::BundleLoader,
     U: uploader::BundleLogsUploader,
 {
-    let mut terminal = ratatui::init();
+    let mut terminal = (!conf.no_ui).then(ratatui::init);
+    let area = terminal
+        .as_mut()
+        .map(|terminal| terminal.get_frame().area());
 
     let model = Arc::new(Model::new(
         log_level,
-        log_buffer_len,
-        terminal.get_frame().area().width,
-        terminal.get_frame().area().height,
+        conf.no_ui,
+        if conf.no_ui {
+            0
+        } else {
+            conf.log_buffer_len.min(5000)
+        },
+        area.map(|area| area.width).unwrap_or(0),
+        area.map(|area| area.height).unwrap_or(0),
     ));
 
     LOGGER.swap_model(Some(model.clone()));
@@ -194,10 +219,25 @@ where
         LOGGER.swap_model(None);
     });
 
-    let input = Input::new(&model);
+    let result = if let Some(mut terminal) = terminal {
+        let input = Input::new(&model);
 
-    let result = select3(
-        View::new(&model, &mut terminal).run(),
+        select3(
+            View::new(&model, &mut terminal).run(),
+            Task::new(
+                model.clone(),
+                conf,
+                bundle_dir,
+                bundle_base_loader,
+                bundle_loader,
+                bundle_logs_uploader,
+            )
+            .run(&input),
+            run_log(&model, &input),
+        )
+        .coalesce()
+        .await
+    } else {
         Task::new(
             model.clone(),
             conf,
@@ -206,70 +246,39 @@ where
             bundle_loader,
             bundle_logs_uploader,
         )
-        .run(&input),
-        run_log(&model, &input),
-    )
-    .coalesce()
-    .await;
+        .run(input::Stdin)
+        .await
+    };
 
-    ratatui::restore();
+    if !conf.no_ui {
+        ratatui::restore();
+    }
 
     result
 }
 
 /// Run the interaction with the logs view
-async fn run_log(model: &Model, input: &Input<'_>) -> anyhow::Result<()> {
+async fn run_log(model: &Model, mut input: impl LogInput) -> anyhow::Result<()> {
     loop {
-        let key = input.get_log_input().await;
+        let action = input.get().await;
 
         model.access_mut(|inner| {
             let log = &mut inner.logs.buffered;
 
-            let notify = match Input::key_m(&key) {
-                Input::HOME => {
-                    log.home_end_x(true);
-                    true
-                }
-                Input::END => {
-                    log.home_end_x(false);
-                    true
-                }
-                Input::LEFT => {
-                    log.scroll_x(true);
-                    true
-                }
-                Input::RIGHT => {
-                    log.scroll_x(false);
-                    true
-                }
-                Input::CTL_HOME => {
-                    log.home_end_y(true);
-                    true
-                }
-                Input::CTL_END => {
-                    log.home_end_y(false);
-                    true
-                }
-                Input::PAGE_UP => {
-                    log.page_scroll_y(true);
-                    true
-                }
-                Input::PAGE_DOWN => {
-                    log.page_scroll_y(false);
-                    true
-                }
-                Input::UP => {
-                    log.scroll_y(true);
-                    true
-                }
-                Input::DOWN => {
-                    log.scroll_y(false);
-                    true
-                }
-                _ => false,
-            };
+            match action {
+                LogInputOutcome::Home => log.home_end_x(true),
+                LogInputOutcome::End => log.home_end_x(false),
+                LogInputOutcome::Left => log.scroll_x(true),
+                LogInputOutcome::Right => log.scroll_x(false),
+                LogInputOutcome::LogHome => log.home_end_y(true),
+                LogInputOutcome::LogEnd => log.home_end_y(false),
+                LogInputOutcome::PgUp => log.page_scroll_y(true),
+                LogInputOutcome::PgDown => log.page_scroll_y(false),
+                LogInputOutcome::Up => log.scroll_y(true),
+                LogInputOutcome::Down => log.scroll_y(false),
+            }
 
-            ((), notify)
+            ((), true)
         });
     }
 }
