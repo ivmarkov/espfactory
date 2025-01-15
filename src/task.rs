@@ -622,15 +622,10 @@ where
                 &keys[0]
             };
 
-            let key_file = NamedTempFile::new().context("Creating temp key file failed")?;
-            fs::write(key_file.path(), key).context("Creating temp key file failed")?;
-
             info!(
                 "About to ENCRYPT flash data: Chip={chip:?}, Flash Size={flash_size:?}, Images N={}",
                 flash_data.len()
             );
-
-            let espsecure = esptools::Tool::EspSecure.mount()?;
 
             for flash_data in &mut flash_data {
                 if flash_data.encrypted_partition {
@@ -640,43 +635,58 @@ where
                         flash_data.data.len()
                     );
 
-                    let input_file =
-                        NamedTempFile::new().context("Creating temp input file failed")?;
-                    fs::write(input_file.path(), flash_data.data.as_slice())
-                        .context("Creating temp input file failed")?;
+                    let encrypted_data = {
+                        let offset = flash_data.offset;
+                        let raw_data = flash_data.data.clone();
+                        let key = key.clone();
 
-                    let output_file =
-                        NamedTempFile::new().context("Creating temp output file failed")?;
+                        unblock("encrypt-flash-data", move || {
+                            let key_file = NamedTempFile::new().context("Creating temp key file failed")?;
+                            fs::write(key_file.path(), key).context("Creating temp key file failed")?;
 
-                    let mut command = Command::new(espsecure.path());
+                            let espsecure = esptools::Tool::EspSecure.mount()?;
 
-                    command
-                        .arg("encrypt_flash_data")
-                        .arg("--aes_xts")
-                        .arg("--keyfile")
-                        .arg(key_file.path())
-                        .arg("--address")
-                        .arg(format!("0x{:x}", flash_data.offset))
-                        .arg("--output")
-                        .arg(output_file.path())
-                        .arg(input_file.path());
+                            let input_file =
+                                NamedTempFile::new().context("Creating temp input file failed")?;
+                            fs::write(input_file.path(), raw_data.as_slice())
+                                .context("Creating temp input file failed")?;
 
-                    let output = command.output().with_context(|| {
-                        "Executing the espsecure tool with command `encrypt_flash_data` failed"
-                            .to_string()
-                    })?;
+                            let output_file =
+                                NamedTempFile::new().context("Creating temp output file failed")?;
 
-                    if !output.status.success() {
-                        anyhow::bail!(
-                            "espsecure tool `encrypt_flash_data` command failed with status: {}. Stderr output:\n{}",
-                            output.status,
-                            core::str::from_utf8(&output.stderr).unwrap_or("???")
-                        );
-                    }
+                            let mut command = Command::new(espsecure.path());
 
-                    flash_data.data = Arc::new(
-                        fs::read(output_file.path()).context("Reading encrypted data failed")?,
-                    );
+                            command
+                                .arg("encrypt_flash_data")
+                                .arg("--aes_xts")
+                                .arg("--keyfile")
+                                .arg(key_file.path())
+                                .arg("--address")
+                                .arg(format!("0x{:x}", offset))
+                                .arg("--output")
+                                .arg(output_file.path())
+                                .arg(input_file.path());
+
+                            let output = command.output().with_context(|| {
+                                "Executing the espsecure tool with command `encrypt_flash_data` failed"
+                                    .to_string()
+                            })?;
+
+                            if !output.status.success() {
+                                anyhow::bail!(
+                                    "espsecure tool `encrypt_flash_data` command failed with status: {}. Stderr output:\n{}",
+                                    output.status,
+                                    core::str::from_utf8(&output.stderr).unwrap_or("???")
+                                );
+                            }
+
+                            let data = fs::read(output_file.path()).context("Reading encrypted data failed")?;
+
+                            Ok(data)
+                        }).await?
+                    };
+
+                    flash_data.data = Arc::new(encrypted_data);
                 }
             }
         }
