@@ -110,12 +110,12 @@ extra_1,  data, 0x06,            ,   20K,
         let bundle_type = BundleType::iter()
             .find(|&bundle_type| name.ends_with(bundle_type.suffix()))
             .ok_or_else(|| {
-                anyhow::anyhow!("Bundle name '{}' does not end with a known suffix", name)
+                anyhow::anyhow!("Bundle name `{}` does not end with a known suffix", name)
             })?;
 
         match bundle_type {
             BundleType::Complete => {
-                info!("Bundle {name} is a ZIP file");
+                info!("Bundle `{name}` is a ZIP file");
                 Self::from_zip_bundle(
                     name,
                     &mut ZipArchive::new(bundle_content)?,
@@ -124,7 +124,7 @@ extra_1,  data, 0x06,            ,   20K,
                 )
             }
             BundleType::BinAppImage => {
-                info!("Bundle {name} is a binary App image");
+                info!("Bundle `{name}` is a binary App image");
                 let mut bytes = Vec::new();
                 bundle_content.read_to_end(&mut bytes)?;
 
@@ -137,7 +137,7 @@ extra_1,  data, 0x06,            ,   20K,
                 )
             }
             BundleType::ElfAppImage => {
-                info!("Bundle {name} is an ELF App image");
+                info!("Bundle `{name}` is an ELF App image");
                 let mut bytes = Vec::new();
                 bundle_content.read_to_end(&mut bytes)?;
 
@@ -167,7 +167,7 @@ extra_1,  data, 0x06,            ,   20K,
         supply_default_part_table: bool,
         supply_default_bootloader: bool,
     ) -> anyhow::Result<Self> {
-        info!("About to prep the ELF App image bundle {name}");
+        info!("About to prep the ELF App image bundle `{name}`");
 
         let app_image =
             Image::new_elf("ota_1".to_string(), flash::elf2bin(app_image, params.chip)?);
@@ -197,7 +197,7 @@ extra_1,  data, 0x06,            ,   20K,
         supply_default_part_table: bool,
         supply_default_bootloader: bool,
     ) -> anyhow::Result<Self> {
-        info!("About to prep the binary App image bundle {name}");
+        info!("About to prep the binary App image bundle `{name}`");
 
         let app_image = Image::new("ota_1".to_string(), app_image.to_vec());
 
@@ -227,7 +227,7 @@ extra_1,  data, 0x06,            ,   20K,
     where
         T: Read + Seek,
     {
-        info!("About to prep the ZIP image bundle {name}");
+        info!("About to prep the ZIP image bundle `{name}`");
 
         let mut params_str = String::new();
         zip.by_name(Self::PARAMS_FILE_NAME)?
@@ -246,7 +246,7 @@ extra_1,  data, 0x06,            ,   20K,
             .map(|index| {
                 let mut zip_file = zip.by_index(index).with_context(|| {
                     format!(
-                        "Loading {} from the ZIP file failed",
+                        "Loading `{}` from the ZIP file failed",
                         Self::PARAMS_FILE_NAME
                     )
                 })?;
@@ -257,7 +257,7 @@ extra_1,  data, 0x06,            ,   20K,
                     .read_to_string(&mut part_table_str)
                     .with_context(|| {
                         format!(
-                            "Loading {} from the ZIP file failed",
+                            "Loading `{}` from the ZIP file failed",
                             Self::PART_TABLE_FILE_NAME
                         )
                     })?;
@@ -271,7 +271,7 @@ extra_1,  data, 0x06,            ,   20K,
             .map(|index| {
                 let mut zip_file = zip.by_index(index).with_context(|| {
                     format!(
-                        "Loading {} from the ZIP file failed",
+                        "Loading `{}` from the ZIP file failed",
                         Self::BOOTLOADER_FILE_NAME
                     )
                 })?;
@@ -279,7 +279,7 @@ extra_1,  data, 0x06,            ,   20K,
                 let mut data = Vec::new();
                 zip_file.read_to_end(&mut data).with_context(|| {
                     format!(
-                        "Loading {} from the ZIP file failed",
+                        "Loading `{}` from the ZIP file failed",
                         Self::BOOTLOADER_FILE_NAME
                     )
                 })?;
@@ -299,12 +299,12 @@ extra_1,  data, 0x06,            ,   20K,
             .map(|file_name| {
                 let mut zip_file = zip
                     .by_name(&file_name)
-                    .with_context(|| format!("Loading {} from the ZIP file failed", file_name))?;
+                    .with_context(|| format!("Loading `{}` from the ZIP file failed", file_name))?;
 
                 let mut data = Vec::new();
                 zip_file
                     .read_to_end(&mut data)
-                    .with_context(|| format!("Loading {} from the ZIP file failed", file_name))?;
+                    .with_context(|| format!("Loading `{}` from the ZIP file failed", file_name))?;
 
                 let name = file_name
                     .strip_prefix(Self::IMAGES_PREFIX)
@@ -336,12 +336,12 @@ extra_1,  data, 0x06,            ,   20K,
             .map(|file_name| {
                 let mut zip_file = zip
                     .by_name(file_name.as_str())
-                    .with_context(|| format!("Loading {} from the ZIP file failed", file_name))?;
+                    .with_context(|| format!("Loading `{}` from the ZIP file failed", file_name))?;
 
                 let mut data = Vec::new();
                 zip_file
                     .read_to_end(&mut data)
-                    .with_context(|| format!("Loading {} from the ZIP file failed", file_name))?;
+                    .with_context(|| format!("Loading `{}` from the ZIP file failed", file_name))?;
 
                 Efuse::new(
                     file_name.strip_prefix(Self::EFUSES_PREFIX).unwrap(),
@@ -419,7 +419,7 @@ extra_1,  data, 0x06,            ,   20K,
             }
         }
 
-        info!("Prepping bundle {name} from parts");
+        info!("Prepping bundle `{name}` from parts");
 
         let pt = PartTableData::new(part_table_str)?;
 
@@ -468,9 +468,9 @@ extra_1,  data, 0x06,            ,   20K,
 
                     if image.elf {
                         if matches!(partition.ty(), Type::App) {
-                            warn!("ELF image found for partition '{}', prefer `.bin` files, as they take less space", partition.name());
+                            warn!("ELF image found for partition `{}`, prefer `.bin` files, as they take less space", partition.name());
                         } else {
-                            anyhow::bail!("Partition '{}' is not of type 'App', but an ELF image was provided", partition.name());
+                            anyhow::bail!("Partition `{}` is not of type 'App', but an ELF image was provided", partition.name());
                         }
                     }
 
@@ -493,7 +493,7 @@ extra_1,  data, 0x06,            ,   20K,
             });
         }
 
-        info!("Bundle {name} prepared");
+        info!("Bundle `{name}` prepared");
 
         let this = Self {
             name,
@@ -541,7 +541,7 @@ extra_1,  data, 0x06,            ,   20K,
                 if mapping.image.is_none() || overwrite {
                     mapping.image = Some(entry.remove());
                 } else {
-                    anyhow::bail!("Image for mapping '{}' already exists", name);
+                    anyhow::bail!("Image for mapping `{}` already exists", name);
                 }
             }
         }
@@ -552,7 +552,7 @@ extra_1,  data, 0x06,            ,   20K,
             for efuse in &other_efuses {
                 for existing_efuse in &self.efuse_mapping {
                     if efuse.efuse.is_same(&existing_efuse.efuse) {
-                        anyhow::bail!("Efuse '{}' already exists", efuse.efuse);
+                        anyhow::bail!("Efuse `{}` already exists", efuse.efuse);
                     }
                 }
             }
@@ -710,6 +710,29 @@ extra_1,  data, 0x06,            ,   20K,
     }
 }
 
+impl Display for Bundle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Bundle `{}` {{", self.name)?;
+        writeln!(f, "  Parameters: {}", self.params)?;
+
+        writeln!(f, "  Partition {{")?;
+        for mapping in &self.parts_mapping {
+            writeln!(f, "    {mapping}")?;
+        }
+        writeln!(f, "  }}")?;
+
+        writeln!(f, "  eFuse {{")?;
+        for efuse in &self.efuse_mapping {
+            writeln!(f, "    {efuse}")?;
+        }
+        writeln!(f, "  }}")?;
+
+        writeln!(f, "}}")?;
+
+        Ok(())
+    }
+}
+
 /// A type for a payload that can be either provided, not providced,
 /// or requested to be the default payload for that payload type
 ///
@@ -779,6 +802,18 @@ impl Default for Params {
     }
 }
 
+impl Display for Params {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Chip: {:?}", self.chip)?;
+
+        if let Some(flash_size) = self.flash_size {
+            write!(f, ", Flash size: {:?}", flash_size)?;
+        }
+
+        Ok(())
+    }
+}
+
 /// The type of the chip to be flashed
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Deserialize)]
 #[non_exhaustive]
@@ -841,6 +876,12 @@ impl Chip {
     }
 }
 
+impl Display for Chip {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_tools_str())
+    }
+}
+
 /// The data to be flashed to the device
 #[derive(Clone, Debug)]
 pub struct FlashData {
@@ -850,6 +891,23 @@ pub struct FlashData {
     pub data: Arc<Vec<u8>>,
     /// Whether the partition where the data is to be flashed is marked as encrypted
     pub encrypted_partition: bool,
+}
+
+impl Display for FlashData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Flash data for addr `0x{:08x}` ({}B)",
+            self.offset,
+            self.data.len()
+        )?;
+
+        if self.encrypted_partition {
+            write!(f, " (encrypted)")?;
+        }
+
+        Ok(())
+    }
 }
 
 /// The mapping of a partition to an image
@@ -871,6 +929,38 @@ impl PartitionMapping {
             .is_some()
             .then(|| self.image.as_ref().map(|image| image.status))
             .flatten()
+    }
+}
+
+impl Display for PartitionMapping {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(partition) = &self.partition {
+            write!(
+                f,
+                "{}({}({}) 0x{:08x} {}B",
+                partition.name(),
+                partition.ty(),
+                partition.subtype(),
+                partition.offset(),
+                partition.size()
+            )?;
+
+            if partition.encrypted() {
+                write!(f, " encrypted")?;
+            }
+
+            write!(f, ")")?;
+        } else {
+            write!(f, "(none)")?;
+        }
+
+        if let Some(image) = &self.image {
+            write!(f, " -> {}", image)?;
+        } else {
+            write!(f, " -> (none)")?;
+        }
+
+        Ok(())
     }
 }
 
@@ -932,13 +1022,13 @@ impl Efuse {
 
         let ty = parts
             .next()
-            .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?;
+            .ok_or_else(|| anyhow::anyhow!("Invalid efuse name `{name}`"))?;
 
         match ty.to_ascii_lowercase().as_str() {
             "param" => {
                 let name = parts
                     .next()
-                    .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Invalid efuse name `{name}`"))?;
 
                 let value_str = parts
                     .next()
@@ -951,11 +1041,11 @@ impl Efuse {
                 let value = u32::from_str_radix(value_str_num, 16)?;
 
                 if parts.next().is_some() {
-                    anyhow::bail!("Invalid efuse name {name}");
+                    anyhow::bail!("Invalid efuse name `{name}`");
                 }
 
                 if !data.is_empty() {
-                    anyhow::bail!("Invalid efuse data for efuse {name}: {} bytes provided, but no data expected", data.len());
+                    anyhow::bail!("Invalid efuse data for efuse `{name}`: {} bytes provided, but no data expected", data.len());
                 }
 
                 Ok(Self::Param {
@@ -966,17 +1056,17 @@ impl Efuse {
             "key" | "keydigest" => {
                 let block = parts
                     .next()
-                    .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Invalid efuse name `{name}`"))?;
                 let purpose = parts
                     .next()
-                    .ok_or_else(|| anyhow::anyhow!("Invalid efuse name {name}"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Invalid efuse name `{name}`"))?;
 
                 if parts.next().is_some() {
-                    anyhow::bail!("Invalid efuse name {name}");
+                    anyhow::bail!("Invalid efuse name `{name}`");
                 }
 
                 if data.is_empty() {
-                    anyhow::bail!("Invalid efuse data for efuse {name}: empty");
+                    anyhow::bail!("Invalid efuse data for efuse `{name}`: empty");
                 }
 
                 if ty == "key" {
@@ -993,7 +1083,7 @@ impl Efuse {
                     })
                 }
             }
-            _ => anyhow::bail!("Invalid efuse type {ty}"),
+            _ => anyhow::bail!("Invalid efuse type `{ty}`"),
         }
     }
 
@@ -1035,6 +1125,12 @@ pub struct EfuseMapping {
     pub status: ProvisioningStatus,
 }
 
+impl Display for EfuseMapping {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.efuse)
+    }
+}
+
 /// An image to be flashed to some partition
 #[derive(Debug, Clone)]
 pub struct Image {
@@ -1074,6 +1170,18 @@ impl Image {
     }
 }
 
+impl Display for Image {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}({}B", self.name, self.data.len())?;
+
+        if self.elf {
+            write!(f, " ELF")?;
+        }
+
+        write!(f, ")")
+    }
+}
+
 /// The status of the provisioning process for a particular partition + image
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ProvisioningStatus {
@@ -1085,4 +1193,15 @@ pub enum ProvisioningStatus {
     InProgress(u8),
     /// The provisioning process has been completed
     Done,
+}
+
+impl Display for ProvisioningStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotStarted => write!(f, "Not started"),
+            Self::Pending => write!(f, "Pending"),
+            Self::InProgress(progress) => write!(f, "In progress ({:.0}%)", *progress as f64),
+            Self::Done => write!(f, "Done"),
+        }
+    }
 }

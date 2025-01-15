@@ -1,15 +1,18 @@
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
+use embassy_futures::select::{select, Either};
+use embassy_sync::signal::Signal;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, RawMutex};
 use embassy_sync::channel::Channel;
 
-use crate::model::Model;
+use crate::model::{BufferedLogsLayout, Model};
 
 extern crate alloc;
 
+/// The outcome of a user confirmation of a step in the main dialogue
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ConfirmOutcome {
     Confirmed,
@@ -20,6 +23,8 @@ pub enum ConfirmOutcome {
 /// A helper for procressing input events from the terminal
 pub struct Input<'a> {
     model: &'a Model,
+    input_changed_main: Signal<CriticalSectionRawMutex, ()>,
+    input_changed_log: Signal<CriticalSectionRawMutex, ()>,
     pump: EventsPump,
 }
 
@@ -28,22 +33,40 @@ impl<'a> Input<'a> {
     pub const NEXT: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Enter);
     pub const QUIT: (KeyModifiers, KeyCode) = (KeyModifiers::ALT, KeyCode::Char('q'));
 
+    pub const UP: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Up);
+    pub const DOWN: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Down);
+    pub const LEFT: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Left);
+    pub const RIGHT: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Right);
+    pub const PAGE_UP: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::PageUp);
+    pub const PAGE_DOWN: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::PageDown);
+    pub const HOME: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Home);
+    pub const END: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::End);
+    pub const CTL_HOME: (KeyModifiers, KeyCode) = (KeyModifiers::CONTROL, KeyCode::Home);
+    pub const CTL_END: (KeyModifiers, KeyCode) = (KeyModifiers::CONTROL, KeyCode::End);
+
+    pub const TOGGLE_LOG: (KeyModifiers, KeyCode) = (KeyModifiers::ALT, KeyCode::Char('l'));
+    pub const WRAP_LOG: (KeyModifiers, KeyCode) = (KeyModifiers::ALT, KeyCode::Char('w'));
+
     /// Creates a new `Input` instance with the given model
-    ///
-    /// The model is necessary only so that the input can automatically trigger redraws on terminal resize events
     pub fn new(model: &'a Model) -> Self {
         Self {
             model,
+            input_changed_main: Signal::new(),
+            input_changed_log: Signal::new(),
             pump: EventsPump::new(),
         }
     }
+
+    //
+    // Methods related to main input
+    //
 
     /// Waits for the user to:
     /// - Go back to the previous step with `Esc`
     /// - or to quit the application with `q`
     pub async fn wait_cancel(&self) -> ConfirmOutcome {
         loop {
-            match Self::key_m(&self.get().await) {
+            match Self::key_m(&self.get_main_input().await) {
                 Self::PREV => break ConfirmOutcome::Canceled,
                 Self::QUIT => break ConfirmOutcome::Quit,
                 _ => (),
@@ -57,7 +80,7 @@ impl<'a> Input<'a> {
     /// - or to quit the application with `q`
     pub async fn wait_confirm(&self) -> ConfirmOutcome {
         loop {
-            match Self::key_m(&self.get().await) {
+            match Self::key_m(&self.get_main_input().await) {
                 Self::NEXT => break ConfirmOutcome::Confirmed,
                 Self::PREV => break ConfirmOutcome::Canceled,
                 Self::QUIT => break ConfirmOutcome::Quit,
@@ -69,23 +92,78 @@ impl<'a> Input<'a> {
     /// Swallows all key presses
     pub async fn swallow(&self) -> ! {
         loop {
-            self.get().await;
+            self.get_main_input().await;
+        }
+    }
+
+    /// Gets the next key press event in case the main input is active
+    /// Waits until the main input is activated otherwise
+    pub async fn get_main_input(&self) -> KeyEvent {
+        self.get(true, &self.input_changed_main).await
+    }
+
+    //
+    // Log input methods
+    //
+
+    /// Gets the next key press event in case the log input is active
+    /// Waits until the log input is activated otherwise
+    pub async fn get_log_input(&self) -> KeyEvent {
+        self.get(false, &self.input_changed_log).await
+    }
+
+    //
+    // Utils
+    //
+
+    /// Gets the next key press event either for the main input or for the log input
+    /// depending on the value of the `main` parameter
+    async fn get(&self, main: bool, signal: &Signal<impl RawMutex, ()>) -> KeyEvent {
+        loop {
+            if self.model.access(|inner| {
+                main != matches!(inner.logs.buffered.layout(), BufferedLogsLayout::Fullscreen)
+            }) {
+                if let Either::Second(key) = select(signal.wait(), self.get_any()).await {
+                    return key;
+                }
+            } else {
+                signal.wait().await;
+            }
         }
     }
 
     /// Gets the next key press event
-    pub async fn get(&self) -> KeyEvent {
+    async fn get_any(&self) -> KeyEvent {
         self.pump.start();
 
         loop {
             match self.pump.state.event.receive().await {
                 // It's important to check that the event is a key press event as
                 // crossterm also emits key release and repeat events on Windows.
-                Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                    return key_event;
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    if Self::key_m(&key) == Self::TOGGLE_LOG || Self::key_m(&key) == Self::WRAP_LOG
+                    {
+                        self.model.modify(|inner| {
+                            let buffered = &mut inner.logs.buffered;
+
+                            if Self::key_m(&key) == Self::TOGGLE_LOG {
+                                buffered.toggle_layout();
+                            } else {
+                                buffered.toggle_wrap();
+                            }
+
+                            self.input_changed_main.signal(());
+                            self.input_changed_log.signal(());
+                        });
+                    } else {
+                        return key;
+                    }
                 }
                 // Fake a dirty model to force redraw on resize
-                Event::Resize(_, _) => self.model.modify(|_| {}),
+                Event::Resize(width, height) => self.model.modify(|inner| {
+                    let buffered = &mut inner.logs.buffered;
+                    buffered.set_size(width, height);
+                }),
                 _ => {}
             }
         }

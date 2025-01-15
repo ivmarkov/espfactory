@@ -1,12 +1,10 @@
 #![allow(async_fn_in_trait)]
-
 use std::path::Path;
 
 use alloc::sync::Arc;
 
-use embassy_futures::select::select;
+use embassy_futures::select::select3;
 
-use embassy_sync::signal::Signal;
 use input::Input;
 use model::Model;
 use serde::{Deserialize, Serialize};
@@ -159,6 +157,8 @@ pub enum BundleIdentification {
 ///
 /// # Arguments
 /// - `conf` - The configuration of the factory
+/// - `log_level` - The log level to use
+/// - `log_buffer_len` - The length of the log buffer
 /// - `bundle_dir` - The directory where a loaded bundle is temporarily stored for processing
 /// - `bundle_base_loader` - An optional loader used to load the base bundle; the base bundle (if used)
 ///   usually contains the device-independent payloads like the bootloader, the partition image
@@ -168,6 +168,8 @@ pub enum BundleIdentification {
 /// - `bundle_logs_uploader` - The uploader used to upload the logs from the device provisioning to the server
 pub async fn run<B, L, U>(
     conf: &Config,
+    log_level: log::LevelFilter,
+    log_buffer_len: usize,
     bundle_dir: &Path,
     bundle_base_loader: Option<B>,
     bundle_loader: L,
@@ -180,16 +182,21 @@ where
 {
     let mut terminal = ratatui::init();
 
-    let signal = Arc::new(Signal::new());
+    let model = Arc::new(Model::new(
+        log_level,
+        log_buffer_len,
+        terminal.get_frame().area().width,
+        terminal.get_frame().area().height,
+    ));
 
-    let model = Arc::new(Model::new(signal.clone()));
-
-    LOGGER.swap_signal(Some(signal));
+    LOGGER.swap_model(Some(model.clone()));
     let _guard = scopeguard::guard((), |_| {
-        LOGGER.swap_signal(None);
+        LOGGER.swap_model(None);
     });
 
-    let result = select(
+    let input = Input::new(&model);
+
+    let result = select3(
         View::new(&model, &mut terminal).run(),
         Task::new(
             model.clone(),
@@ -199,7 +206,8 @@ where
             bundle_loader,
             bundle_logs_uploader,
         )
-        .run(&Input::new(&model)),
+        .run(&input),
+        run_log(&model, &input),
     )
     .coalesce()
     .await;
@@ -207,4 +215,61 @@ where
     ratatui::restore();
 
     result
+}
+
+/// Run the interaction with the logs view
+async fn run_log(model: &Model, input: &Input<'_>) -> anyhow::Result<()> {
+    loop {
+        let key = input.get_log_input().await;
+
+        model.access_mut(|inner| {
+            let log = &mut inner.logs.buffered;
+
+            let notify = match Input::key_m(&key) {
+                Input::HOME => {
+                    log.home_end_x(true);
+                    true
+                }
+                Input::END => {
+                    log.home_end_x(false);
+                    true
+                }
+                Input::LEFT => {
+                    log.scroll_x(true);
+                    true
+                }
+                Input::RIGHT => {
+                    log.scroll_x(false);
+                    true
+                }
+                Input::CTL_HOME => {
+                    log.home_end_y(true);
+                    true
+                }
+                Input::CTL_END => {
+                    log.home_end_y(false);
+                    true
+                }
+                Input::PAGE_UP => {
+                    log.page_scroll_y(true);
+                    true
+                }
+                Input::PAGE_DOWN => {
+                    log.page_scroll_y(false);
+                    true
+                }
+                Input::UP => {
+                    log.scroll_y(true);
+                    true
+                }
+                Input::DOWN => {
+                    log.scroll_y(false);
+                    true
+                }
+                _ => false,
+            };
+
+            ((), notify)
+        });
+    }
 }

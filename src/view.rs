@@ -1,16 +1,19 @@
 use core::cmp::Ordering;
 
 use bitflags::bitflags;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::Stylize;
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Widget, Wrap};
 use ratatui::DefaultTerminal;
 
 use crate::bundle::{Bundle, Efuse, ProvisioningStatus};
-use crate::logger::LOGGER;
-use crate::model::{Model, Processing, Provision, Readout, State, Status};
+use crate::model::{
+    BufferedLogs, BufferedLogsLayout, Logs, Model, ModelInner, Processing, Provision, Readout,
+    State, Status,
+};
 
 /// The view (UI) of the application
 ///
@@ -31,12 +34,26 @@ impl<'a, 'b> View<'a, 'b> {
     /// Runs the view rendering loop by watching for changes in the model and re-rendering the UI
     pub async fn run(&mut self) -> anyhow::Result<()> {
         loop {
-            self.model.access(|state| {
+            self.model.access(|inner| {
                 self.term
-                    .draw(|frame| frame.render_widget(state, frame.area()))
+                    .draw(|frame| frame.render_widget(inner, frame.area()))
             })?;
 
             self.model.wait_changed().await;
+        }
+    }
+}
+
+impl Widget for &ModelInner {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let (main_area, logs_area) = self.logs.buffered.layout().split(area);
+
+        if main_area.width > 0 && main_area.height > 0 {
+            self.state.render(main_area, buf);
+        }
+
+        if logs_area.width > 0 && logs_area.height > 0 {
+            self.logs.render(logs_area, buf);
         }
     }
 }
@@ -54,7 +71,7 @@ impl Widget for &State {
 
 impl Widget for &Readout {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = render_main(
+        render_main(
             Some(" Readouts ".bold()),
             Keys::INPUT | Keys::RESET | Keys::QUIT,
             area,
@@ -177,7 +194,7 @@ impl Provision {
 
 impl Widget for &Provision {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = render_main(
+        render_main(
             Some(Line::from(vec![
                 " ".into(),
                 "Bundle ".bold(),
@@ -386,7 +403,7 @@ impl Widget for &Provision {
 
 impl Widget for &Processing {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = render_main(
+        render_main(
             Some(self.title.clone().bold()),
             Keys::BACK | Keys::QUIT,
             area,
@@ -414,7 +431,7 @@ impl Widget for &Processing {
 
 impl Widget for &Status {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = render_main(
+        render_main(
             Some(self.title.clone().bold()),
             if self.error {
                 Keys::RETRY | Keys::BACK | Keys::QUIT
@@ -433,18 +450,46 @@ impl Widget for &Status {
             para = para.yellow();
         }
 
-        para.render(area.inner(Margin::new(2, 4)), buf);
+        para.render(area.inner(Margin::new(1, 1)), buf);
     }
 }
 
-fn render_main<'a>(
-    title: Option<impl Into<Line<'a>>>,
-    keys: Keys,
-    area: Rect,
-    buf: &mut Buffer,
-) -> Rect {
-    let layout = Layout::vertical([Constraint::Percentage(100), Constraint::Length(6)]).split(area);
+impl Widget for &Logs {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        self.buffered.render(area, buf);
+    }
+}
 
+impl Widget for &BufferedLogs {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if matches!(self.layout(), BufferedLogsLayout::Fullscreen) {
+            let layout = Layout::new(
+                Direction::Vertical,
+                [Constraint::Length(1), Constraint::Percentage(100)],
+            )
+            .split(area);
+
+            Line::from(vec![
+                "Navigate ".into(),
+                "<Arrows/Page/Home/End Keys>".yellow().bold(),
+                " Wrap ".into(),
+                "<Alt-W>".yellow().bold(),
+                " Main ".into(),
+                "<Alt-L> ".yellow().bold(),
+            ])
+            .black()
+            .on_white()
+            .right_aligned()
+            .render(layout[0], buf);
+
+            self.para(true, layout[1].height).render(layout[1], buf);
+        } else {
+            self.para(true, area.height).render(area, buf);
+        }
+    }
+}
+
+fn render_main<'a>(title: Option<impl Into<Line<'a>>>, keys: Keys, area: Rect, buf: &mut Buffer) {
     let mut block = Block::bordered().title_top(
         Line::from(" ESP32 Factory Provisioning ")
             .bold()
@@ -460,33 +505,7 @@ fn render_main<'a>(
         block = block.title_bottom(instructions.right_aligned().yellow());
     }
 
-    block.on_blue().white().render(layout[0], buf);
-
-    let area = layout[1];
-
-    let lines = LOGGER.lock(|logger| {
-        logger
-            .last_n(area.height as usize)
-            .cloned()
-            .collect::<Vec<_>>()
-    });
-
-    for (index, line) in lines.iter().enumerate() {
-        let level = Span::from(format!("[{}] ", line.level.as_str()));
-
-        let level = match line.level {
-            log::Level::Error => level.red().bold(),
-            log::Level::Warn => level.yellow().bold(),
-            log::Level::Info => level.green(),
-            log::Level::Debug => level.blue(),
-            log::Level::Trace => level.cyan(),
-        };
-
-        let line = Line::from(vec![level, line.message.as_str().into()]);
-        line.render(Rect::new(area.x, area.y + index as u16, area.width, 1), buf);
-    }
-
-    layout[0]
+    block.on_blue().white().render(area, buf);
 }
 
 bitflags! {
@@ -530,6 +549,9 @@ impl Keys {
                 instructions.push(" Reset ".into());
                 instructions.push("<Esc>".yellow().bold());
             }
+
+            instructions.push(" Logs ".into());
+            instructions.push("<Alt-L>".yellow().bold());
 
             if self.contains(Self::QUIT) {
                 instructions.push(" Quit ".into());

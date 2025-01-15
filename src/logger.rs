@@ -1,46 +1,15 @@
-use std::fs::File;
-use std::io::Write;
 use std::sync::Mutex;
 
-use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, RawMutex};
-use embassy_sync::signal::Signal;
+use log::{Level, Log, Metadata, Record};
 
-use log::{Level, LevelFilter, Log, Metadata, Record};
+use crate::model::Model;
 
 extern crate alloc;
 
-pub type LogFile = File;
-
 /// The global logger used by the factory
-pub static LOGGER: Logger<LogFile, Arc<Signal<CriticalSectionRawMutex, ()>>> =
-    Logger::new(LevelFilter::Info, LevelFilter::Info, 20);
-
-/// A trait for signaling that a log message has been written
-pub trait LogSignal {
-    /// Signal that a log message has been written
-    fn signal(&self);
-}
-
-impl<T> LogSignal for &T
-where
-    T: LogSignal,
-{
-    fn signal(&self) {
-        (**self).signal();
-    }
-}
-
-impl<T> LogSignal for Arc<Signal<T, ()>>
-where
-    T: RawMutex + Send,
-{
-    fn signal(&self) {
-        self.as_ref().signal(());
-    }
-}
+pub static LOGGER: Logger = Logger::new();
 
 /// The logger used by `espfactory`
 ///
@@ -48,228 +17,49 @@ where
 /// - Writes all logs to a file
 /// - Keeps the last N log lines in a memory buffer (for rendering in the UI)
 /// - Signals when a log message has been written
-pub struct Logger<T, S> {
-    inner: Mutex<LoggerState<T>>,
-    signal: Mutex<Option<S>>,
+pub struct Logger(Mutex<Option<Arc<Model>>>);
+
+impl Default for Logger {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-impl<T, S> Logger<T, S>
-where
-    T: Write,
-    S: LogSignal,
-{
+impl Logger {
     /// Create a new `Logger`
-    ///
-    /// # Arguments
-    /// - `level` - the log level to use overall (for writing to the file as well as for keeping in memory)
-    /// - `last_n_level` - the log level to use for keeping the last N log lines in memory (should be higher or equal to the overall log level)
-    /// - `last_n_len` - the number of last N log lines to keep in memory
-    pub const fn new(level: LevelFilter, last_n_level: LevelFilter, last_n_len: usize) -> Self {
-        Self {
-            inner: Mutex::new(LoggerState {
-                level,
-                last_n: VecDeque::new(),
-                last_n_len,
-                last_n_level,
-                out: None,
-            }),
-            signal: Mutex::new(None),
-        }
+    pub const fn new() -> Self {
+        Self(Mutex::new(None))
     }
 
-    /// Swaps the existing signal used by the logger (if any) with the provided one
-    /// The signal will be called any time a log message is written
-    ///
-    /// Returns the previous signal, if any
-    ///
-    /// # Arguments
-    /// - `signal` - the new signal to use or `None` to remove the existing signal
-    pub fn swap_signal(&self, signal: Option<S>) -> Option<S> {
-        let mut guard = self.signal.lock().unwrap();
+    /// Swap the current model in the logger (if any) with a new one or `None`
+    pub fn swap_model(&self, model: Option<Arc<Model>>) -> Option<Arc<Model>> {
+        let mut guard = self.0.lock().unwrap();
 
-        core::mem::replace(&mut guard, signal)
-    }
-
-    /// Locks the logger and returns a guard to the logger state
-    ///
-    /// The logger is locked only if it is not already locked by the current thread
-    ///
-    /// Returns `None` if the logger is already locked by the current thread
-    /// or `Some` with a guard to the logger state otherwise
-    pub fn lock<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut LoggerState<T>) -> R,
-    {
-        let mut guard = self.inner.lock().unwrap();
-
-        f(&mut guard)
+        core::mem::replace(&mut guard, model)
     }
 }
 
-impl<T, S> Log for Logger<T, S>
-where
-    T: Write + Send,
-    S: LogSignal + Send,
-{
-    fn enabled(&self, _metadata: &Metadata) -> bool {
-        true
+impl Log for Logger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() >= Level::Info
     }
 
     fn log(&self, record: &Record) {
-        if self.lock(|logger| logger.log(record)) {
-            // TODO: Figure out why signalling leads to a deadlock
-            let signal = self.signal.lock().unwrap();
-            if let Some(signal) = signal.as_ref() {
-                signal.signal();
-            }
+        if let Some(model) = self.0.lock().unwrap().clone() {
+            model.access_mut(|inner| {
+                inner.logs.file.log(record);
+
+                ((), inner.logs.buffered.log(record))
+            });
         }
     }
 
     fn flush(&self) {
-        // TODO
-    }
-}
-
-/// The state of a `Logger` instance
-pub struct LoggerState<T> {
-    level: LevelFilter,
-    last_n: VecDeque<LogLine>,
-    last_n_len: usize,
-    last_n_level: LevelFilter,
-    out: Option<T>,
-}
-
-impl<T> LoggerState<T>
-where
-    T: Write,
-{
-    /// Set the log level to use overall
-    pub fn set_level(&mut self, level: LevelFilter) {
-        self.level = level;
-    }
-
-    /// Swaps the existing output used by the logger (if any) with the provided one
-    ///
-    /// Returns the previous output, if any
-    ///
-    /// # Arguments
-    /// - `out` - the new output to use or `None` to remove the existing output
-    pub fn swap_out(&mut self, out: Option<T>) -> Option<T> {
-        core::mem::replace(&mut self.out, out)
-    }
-
-    /// Get an iterator over the last `n` log lines kept in memory
-    ///
-    /// # Arguments
-    /// - `n` - the number of last log lines to get
-    pub fn last_n(&self, n: usize) -> impl Iterator<Item = &LogLine> {
-        self.last_n.iter().skip(if self.last_n.len() > n {
-            self.last_n.len() - n
-        } else {
-            0
-        })
-    }
-
-    fn log(&mut self, record: &Record) -> bool {
-        if self.level >= record.level() {
-            if let Some(out) = self.out.as_mut() {
-                let message = format!(
-                    "[{} {} {}] {}",
-                    record.level(),
-                    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ"),
-                    record.target(),
-                    record.args()
-                );
-
-                let _ = out.write_all(message.as_bytes());
-                let _ = out.write_all(b"\n");
-            }
-
-            if self.last_n_level >= record.level() {
-                for line in format!("{}", record.args()).lines() {
-                    self.push(LogLine {
-                        level: record.level(),
-                        message: line.to_string(),
-                    });
-                }
-
-                return true;
-            }
+        if let Some(model) = self.0.lock().unwrap().clone() {
+            model.access_mut(|inner| {
+                inner.logs.file.flush();
+                ((), false)
+            });
         }
-
-        false
-    }
-
-    fn push(&mut self, msg: LogLine) {
-        if self.last_n.len() >= self.last_n_len {
-            self.last_n.pop_front();
-        }
-
-        self.last_n.push_back(msg);
-    }
-}
-
-/// A log line kept in memory
-#[derive(Debug, Clone)]
-pub struct LogLine {
-    /// The log level of the line
-    pub level: Level,
-    /// The message to be displayed on that line
-    pub message: String,
-}
-
-pub mod file {
-    use std::io::{Read, Seek, SeekFrom, Write};
-
-    use tempfile::tempfile;
-
-    use zip::{write::FileOptions, ZipWriter};
-
-    use super::LogFile;
-
-    pub fn start() -> anyhow::Result<LogFile> {
-        let log = tempfile()?;
-
-        Ok(log)
-    }
-
-    pub fn finish<'i, I, S>(mut log: LogFile, summary: I) -> anyhow::Result<impl Read + Seek>
-    where
-        I: IntoIterator<Item = &'i (S, S)>,
-        S: AsRef<str> + 'i,
-    {
-        let mut log_zip_file = tempfile()?;
-
-        let mut log_zip = ZipWriter::new(&mut log_zip_file);
-        log_zip.start_file("log.txt", FileOptions::<()>::default())?;
-
-        log.flush()?;
-        log.seek(SeekFrom::Start(0))?;
-
-        std::io::copy(&mut log, &mut log_zip)?;
-
-        drop(log);
-
-        log_zip.start_file("log.csv", FileOptions::<()>::default())?;
-
-        let mut csv = csv::WriterBuilder::new()
-            .has_headers(true)
-            .from_writer(&mut log_zip);
-
-        csv.serialize(("Name", "Value"))?;
-
-        for (name, value) in summary {
-            csv.serialize((name.as_ref(), value.as_ref()))?;
-        }
-
-        csv.flush()?;
-
-        drop(csv);
-        drop(log_zip);
-
-        log_zip_file.flush()?;
-        log_zip_file.seek(SeekFrom::Start(0))?;
-
-        Ok(log_zip_file)
     }
 }
