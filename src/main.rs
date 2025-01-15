@@ -22,7 +22,7 @@ extern crate alloc;
 #[command(version, about, long_about = None, color = ColorChoice::Auto)]
 struct Cli {
     /// Verbosity
-    #[arg(short = 'l', long, default_value = "verbose")]
+    #[arg(short = 'l', long, default_value = "regular")]
     verbosity: Verbosity,
 
     /// Configuration file
@@ -185,6 +185,7 @@ fn run() -> anyhow::Result<()> {
         espfactory::run(
             &conf.config,
             args.verbosity.log_level(),
+            1000, // TODO: Un-hardcode?
             bundle_dir,
             base_loader,
             loader,

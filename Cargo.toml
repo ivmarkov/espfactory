@@ -12,6 +12,9 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 rust-version = "1.82"
 
+[profile.release]
+debug = true # So that we get meaningful stacktraces even in release
+
 [[bin]]
 name = "espfactory"
 required-features = ["bin"]

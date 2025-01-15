@@ -122,6 +122,8 @@ where
                 });
             }
 
+            info!("========== Starting PCB provisioning ==========");
+
             let _guard = {
                 let model = self.model.clone();
 
@@ -139,6 +141,8 @@ where
                 let bundle_id = loop {
                     summary.clear();
 
+                    info!("=== => STEP 1: eFuse readouts");
+
                     let result = Self::handle(
                         &self.model.clone(),
                         self.step1_prepare_efuse_readout(input),
@@ -152,6 +156,8 @@ where
                         Err(TaskError::Canceled) | Err(TaskError::Retry) => continue,
                         Err(other) => Err(other)?,
                     }
+
+                    info!("=== => STEP 2: manual readouts");
 
                     let result = self.step2_readout(input).await;
 
@@ -175,6 +181,8 @@ where
                     });
 
                     break loop {
+                        info!("=== => STEP 3: Bundle preparation");
+
                         // TODO: Not very efficient
                         let readout = self.model.access(|inner| inner.state.readout().clone());
 
@@ -201,6 +209,8 @@ where
                 };
 
                 break loop {
+                    info!("=== => STEP 4: PCB provisioning");
+
                     if !self.conf.skip_confirmations {
                         match input.wait_confirm().await.into() {
                             Ok(_) => (),
@@ -234,6 +244,8 @@ where
                     }
                 };
             };
+
+            info!("========== PCB provisioning complete, uploading logs ==========");
 
             // Step 5
             let log_file = self
@@ -509,6 +521,8 @@ where
         .await?;
 
         let bundle = if let Some(base_loader) = self.bundle_base_loader.as_mut() {
+            info!("About to load base bundle");
+
             let mut base_bundle = Self::prep_one_bundle(
                 &self.model,
                 self.bundle_dir,
@@ -519,12 +533,23 @@ where
             )
             .await?;
 
+            info!("Loaded base bundle `{}`", base_bundle.name);
+
             self.model.modify(|inner| {
                 inner.state.processing_mut().status =
-                    format!("Merging {} and {}", base_bundle.name, bundle.name);
+                    format!("Merging `{}` and `{}`", base_bundle.name, bundle.name);
             });
 
+            info!(
+                "Merging base bundle `{}` with bundle `{}`, override `{}`",
+                base_bundle.name, bundle.name, self.conf.overwrite_on_merge
+            );
+
             base_bundle.add(bundle, self.conf.overwrite_on_merge)?;
+
+            info!("{base_bundle}");
+
+            info!("Bundles merged");
 
             base_bundle
         } else {
@@ -589,7 +614,11 @@ where
 
             for flash_data in &mut flash_data {
                 if flash_data.encrypted_partition {
-                    info!("Encrypting image at offset `{:x}`", flash_data.offset);
+                    info!(
+                        "Encrypting image for addr `0x{:08x}`, {}B",
+                        flash_data.offset,
+                        flash_data.data.len()
+                    );
 
                     let input_file =
                         NamedTempFile::new().context("Creating temp input file failed")?;
@@ -826,13 +855,17 @@ where
         let mut bundle_file =
             File::open(bundle_path).context("Opening the loaded bundle file failed")?;
 
-        Bundle::create(
+        let bundle = Bundle::create(
             bundle_name,
             Params::default(),
             &mut bundle_file,
             supply_default_partition_table,
             supply_default_bootloader,
-        )
+        )?;
+
+        info!("{bundle}");
+
+        Ok(bundle)
     }
 
     fn burn(
@@ -880,6 +913,8 @@ where
         });
 
         if !keys.is_empty() {
+            info!("Initiating burn of {} keys", keys.len());
+
             let keys_output = efuse::burn_keys(
                 protect_keys,
                 chip,
@@ -903,6 +938,8 @@ where
             });
 
             write!(&mut output, "{keys_output}\n\n")?;
+
+            info!("Burn of keys complete");
         }
 
         // Step 2: Burn key digests next (should be after keys, check the comment inside `efuse::burn_keys_or_digests`)
@@ -932,6 +969,8 @@ where
         });
 
         if !digests.is_empty() {
+            info!("Initiating burn of {} key digests", digests.len());
+
             let digests_output = efuse::burn_key_digests(
                 protect_digests,
                 chip,
@@ -955,6 +994,8 @@ where
             });
 
             write!(&mut output, "{digests_output}\n\n")?;
+
+            info!("Burn of key digests complete");
         }
 
         // Step 3: Finally, burn all params
@@ -979,6 +1020,8 @@ where
         });
 
         if !params.is_empty() {
+            info!("Initiating burn of {} params", params.len());
+
             let params_output = efuse::burn_efuses(
                 chip,
                 port,
@@ -999,6 +1042,8 @@ where
             });
 
             write!(&mut output, "{params_output}\n\n")?;
+
+            info!("Burn of params complete");
         }
 
         Ok(output)
@@ -1108,6 +1153,8 @@ impl ProgressCallbacks for FlashProgress {
 
             ((), notify)
         });
+
+        info!("Initiated flash for addr `0x{addr:08x}`, size {total}KB");
     }
 
     fn update(&mut self, current: usize) {
@@ -1134,6 +1181,8 @@ impl ProgressCallbacks for FlashProgress {
 
                 ((), notify)
             });
+
+            info!("Flash for addr `0x{addr:08x}` completed");
         }
     }
 }

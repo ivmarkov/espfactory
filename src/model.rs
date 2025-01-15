@@ -36,12 +36,23 @@ impl Model {
     /// Create a new model in the initial state (readouts)
     ///
     /// Arguments:
-    /// - `level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `log_level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `log_buffer_len`: The maximum number of log lines to keep in the on-screen logs buffer
     /// - `width`: The initial width of the screen (necessary for proper paging in the on-screen logs)
     /// - `height`: The initial height of the screen (necessary for proper paging in the on-screen logs)
-    pub const fn new(level: LevelFilter, width: u16, height: u16) -> Self {
+    pub const fn new(
+        log_level: LevelFilter,
+        log_buffer_len: usize,
+        width: u16,
+        height: u16,
+    ) -> Self {
         Self {
-            state: Mutex::new(RefCell::new(ModelInner::new(level, width, height))),
+            state: Mutex::new(RefCell::new(ModelInner::new(
+                log_level,
+                log_buffer_len,
+                width,
+                height,
+            ))),
             changed: Signal::new(),
         }
     }
@@ -103,13 +114,25 @@ impl ModelInner {
     /// Create a new model in the initial state (readouts)
     ///
     /// Arguments:
-    /// - `level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `log_level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `log_buffer_len`: The maximum number of log lines to keep in the on-screen logs buffer
     /// - `width`: The initial width of the screen (necessary for proper paging in the on-screen logs)
     /// - `height`: The initial height of the screen (necessary for proper paging in the on-screen logs)
-    pub const fn new(level: LevelFilter, width: u16, height: u16) -> Self {
+    pub const fn new(
+        log_level: LevelFilter,
+        log_buffer_len: usize,
+        width: u16,
+        height: u16,
+    ) -> Self {
         Self {
             state: State::new(),
-            logs: Logs::new(level, BufferedLogsLayout::Bottom, width, height),
+            logs: Logs::new(
+                log_level,
+                log_buffer_len,
+                BufferedLogsLayout::Bottom,
+                width,
+                height,
+            ),
         }
     }
 }
@@ -338,18 +361,30 @@ impl Logs {
     ///
     /// Arguments:
     /// - `level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `buffer_len`: The maximum number of log lines to keep in the on-screen logs buffer
     /// - `layout`: The initial layout of the on-screen logs (i.e. fullscreen, hidden or bottom)
     /// - `width`: The initial width of the screen (necessary for proper paging in the on-screen logs)
     /// - `height`: The initial height of the screen (necessary for proper paging in the on-screen logs)
     pub const fn new(
         level: LevelFilter,
+        buffer_len: usize,
         layout: BufferedLogsLayout,
         width: u16,
         height: u16,
     ) -> Self {
         Self {
             file: FileLogs::new(level),
-            buffered: BufferedLogs::new(level, 1000, layout, width, height),
+            buffered: BufferedLogs::new(
+                if level as usize <= LevelFilter::Info as usize {
+                    level
+                } else {
+                    LevelFilter::Info
+                },
+                buffer_len,
+                layout,
+                width,
+                height,
+            ),
         }
     }
 
@@ -602,8 +637,8 @@ impl BufferedLogs {
 
     /// Log a record to the on-screen logs
     pub fn log(&mut self, record: &Record) -> bool {
-        if self.level >= record.level() {
-            let no = self.count;
+        if self.level >= record.level() && self.buffer_len > 0 {
+            let no = self.count + 1;
 
             let no = Span::from(format!("{:08} ", no)).on_white().black();
 
@@ -650,6 +685,7 @@ impl BufferedLogs {
         self.viewport.y = 0;
 
         self.buffer.clear();
+        self.count = 0;
     }
 
     /// Move the viewport to the beginning or the end of the on-screen logs by the X axis
@@ -698,7 +734,7 @@ impl BufferedLogs {
 
     /// Scroll the viewport by one page up or down
     pub fn page_scroll_y(&mut self, up: bool) {
-        self.scroll_y_by(self.viewport.height, up);
+        self.scroll_y_by((self.viewport.height as i32 - 1).max(0) as _, up);
     }
 
     /// Scroll the viewport by the given height up or down
@@ -717,7 +753,7 @@ impl BufferedLogs {
         let mut para = Paragraph::new(Text::from_iter(self.buffer.iter().cloned()));
 
         if self.wrap {
-            para = para.wrap(Wrap { trim: true });
+            para = para.wrap(Wrap { trim: false });
         }
 
         if scroll {
@@ -740,7 +776,7 @@ impl BufferedLogs {
 
         let lines_ct = para.line_count(self.viewport.width);
 
-        (lines_ct as i32 - self.viewport.height as i32).max(0) as _
+        (lines_ct as i32 - (self.viewport.height as i32 - 1).max(0)).max(0) as _
     }
 
     /// Get the maximum meaningful X position of the viewport

@@ -471,11 +471,11 @@ impl Widget for &BufferedLogs {
 
             Line::from(vec![
                 "Navigate ".into(),
-                "<Arrow/Page/Home/End Keys>".yellow().bold(),
-                " Main ".into(),
-                "<Alt-L>".yellow().bold(),
+                "<Arrows/Page/Home/End Keys>".yellow().bold(),
                 " Wrap ".into(),
                 "<Alt-W>".yellow().bold(),
+                " Main ".into(),
+                "<Alt-L> ".yellow().bold(),
             ])
             .black()
             .on_white()
