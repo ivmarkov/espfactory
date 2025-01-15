@@ -9,7 +9,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 
-use log::{LevelFilter, Record};
+use log::{LevelFilter, Log as _, Record};
 
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -37,11 +37,13 @@ impl Model {
     ///
     /// Arguments:
     /// - `log_level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `no_ui`: When `true` the interactive UI is disabled and the console logger is active
     /// - `log_buffer_len`: The maximum number of log lines to keep in the on-screen logs buffer
     /// - `width`: The initial width of the screen (necessary for proper paging in the on-screen logs)
     /// - `height`: The initial height of the screen (necessary for proper paging in the on-screen logs)
     pub const fn new(
         log_level: LevelFilter,
+        no_ui: bool,
         log_buffer_len: usize,
         width: u16,
         height: u16,
@@ -49,6 +51,7 @@ impl Model {
         Self {
             state: Mutex::new(RefCell::new(ModelInner::new(
                 log_level,
+                no_ui,
                 log_buffer_len,
                 width,
                 height,
@@ -115,11 +118,13 @@ impl ModelInner {
     ///
     /// Arguments:
     /// - `log_level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `no_ui`: When `true` the interactive UI is disabled and the console logger is active
     /// - `log_buffer_len`: The maximum number of log lines to keep in the on-screen logs buffer
     /// - `width`: The initial width of the screen (necessary for proper paging in the on-screen logs)
     /// - `height`: The initial height of the screen (necessary for proper paging in the on-screen logs)
     pub const fn new(
         log_level: LevelFilter,
+        no_ui: bool,
         log_buffer_len: usize,
         width: u16,
         height: u16,
@@ -128,6 +133,7 @@ impl ModelInner {
             state: State::new(),
             logs: Logs::new(
                 log_level,
+                no_ui,
                 log_buffer_len,
                 BufferedLogsLayout::Bottom,
                 width,
@@ -361,19 +367,21 @@ impl Logs {
     ///
     /// Arguments:
     /// - `level`: The log level of the model (for both file logging as well as on-screen logging)
+    /// - `no_ui`: When `true` the interactive UI is disabled and the console logger is active
     /// - `buffer_len`: The maximum number of log lines to keep in the on-screen logs buffer
     /// - `layout`: The initial layout of the on-screen logs (i.e. fullscreen, hidden or bottom)
     /// - `width`: The initial width of the screen (necessary for proper paging in the on-screen logs)
     /// - `height`: The initial height of the screen (necessary for proper paging in the on-screen logs)
     pub const fn new(
         level: LevelFilter,
+        no_ui: bool,
         buffer_len: usize,
         layout: BufferedLogsLayout,
         width: u16,
         height: u16,
     ) -> Self {
         Self {
-            file: FileLogs::new(level),
+            file: FileLogs::new(level, no_ui),
             buffered: BufferedLogs::new(
                 if level as usize <= LevelFilter::Info as usize {
                     level
@@ -411,8 +419,12 @@ impl Logs {
 pub struct FileLogs {
     /// The log level of the file logs
     level: LevelFilter,
+    /// When `true` the interactive UI is disabled and the console logger below is active
+    no_ui: bool,
     /// The file to write the logs to
     file: Option<File>,
+    /// The optional console logger in case the interactive UI is disabled
+    console: Option<env_logger::Logger>,
 }
 
 impl FileLogs {
@@ -420,8 +432,13 @@ impl FileLogs {
     ///
     /// Arguments:
     /// - `level`: The log level of the model (for file logging)
-    pub const fn new(level: LevelFilter) -> Self {
-        Self { level, file: None }
+    pub const fn new(level: LevelFilter, no_ui: bool) -> Self {
+        Self {
+            level,
+            no_ui,
+            file: None,
+            console: None,
+        }
     }
 
     /// Start the file logs
@@ -429,6 +446,16 @@ impl FileLogs {
         let log = tempfile()?;
 
         self.file = Some(log);
+
+        if self.no_ui && self.console.is_none() {
+            self.console = Some(
+                env_logger::Builder::new()
+                    .format_timestamp(None)
+                    .format_target(false)
+                    .filter_level(self.level)
+                    .build(),
+            );
+        }
 
         Ok(())
     }
@@ -484,6 +511,8 @@ impl FileLogs {
 
     /// Log a record to the file logs
     pub fn log(&mut self, record: &Record) -> bool {
+        let mut logged = false;
+
         if self.level >= record.level() {
             if let Some(out) = self.file.as_mut() {
                 let message = format!(
@@ -497,11 +526,17 @@ impl FileLogs {
                 let _ = out.write_all(message.as_bytes());
                 let _ = out.write_all(b"\n");
 
-                return true;
+                logged |= true;
+            }
+
+            if let Some(console) = self.console.as_mut() {
+                console.log(record);
+
+                logged |= true;
             }
         }
 
-        false
+        logged
     }
 
     /// Flush the file logs

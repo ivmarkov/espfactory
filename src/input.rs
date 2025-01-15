@@ -1,244 +1,144 @@
-use alloc::sync::Arc;
-use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_futures::select::{select, Either};
-use embassy_sync::signal::Signal;
+use std::io::Write;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crate::utils::futures::unblock;
 
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, RawMutex};
-use embassy_sync::channel::Channel;
-
-use crate::model::{BufferedLogsLayout, Model};
-
-extern crate alloc;
-
-/// The outcome of a user confirmation of a step in the main dialogue
+/// The outcome of a user confirmation of a step in the task workflow
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum ConfirmOutcome {
+pub enum TaskConfirmationOutcome {
     Confirmed,
     Canceled,
     Quit,
 }
 
-/// A helper for procressing input events from the terminal
-pub struct Input<'a> {
-    model: &'a Model,
-    input_changed_main: Signal<CriticalSectionRawMutex, ()>,
-    input_changed_log: Signal<CriticalSectionRawMutex, ()>,
-    pump: EventsPump,
+/// The outcome of a user input in the task workflow
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum TaskInputOutcome {
+    Modified(String),
+    Done(String),
+    StartOver,
+    Quit,
 }
 
-impl<'a> Input<'a> {
-    pub const PREV: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Esc);
-    pub const NEXT: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Enter);
-    pub const QUIT: (KeyModifiers, KeyCode) = (KeyModifiers::ALT, KeyCode::Char('q'));
-
-    pub const UP: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Up);
-    pub const DOWN: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Down);
-    pub const LEFT: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Left);
-    pub const RIGHT: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Right);
-    pub const PAGE_UP: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::PageUp);
-    pub const PAGE_DOWN: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::PageDown);
-    pub const HOME: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Home);
-    pub const END: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::End);
-    pub const CTL_HOME: (KeyModifiers, KeyCode) = (KeyModifiers::CONTROL, KeyCode::Home);
-    pub const CTL_END: (KeyModifiers, KeyCode) = (KeyModifiers::CONTROL, KeyCode::End);
-
-    pub const TOGGLE_LOG: (KeyModifiers, KeyCode) = (KeyModifiers::ALT, KeyCode::Char('l'));
-    pub const WRAP_LOG: (KeyModifiers, KeyCode) = (KeyModifiers::ALT, KeyCode::Char('w'));
-
-    /// Creates a new `Input` instance with the given model
-    pub fn new(model: &'a Model) -> Self {
-        Self {
-            model,
-            input_changed_main: Signal::new(),
-            input_changed_log: Signal::new(),
-            pump: EventsPump::new(),
-        }
-    }
-
-    //
-    // Methods related to main input
-    //
-
+pub trait TaskInput {
     /// Waits for the user to:
     /// - Go back to the previous step with `Esc`
     /// - or to quit the application with `q`
-    pub async fn wait_cancel(&self) -> ConfirmOutcome {
-        loop {
-            match Self::key_m(&self.get_main_input().await) {
-                Self::PREV => break ConfirmOutcome::Canceled,
-                Self::QUIT => break ConfirmOutcome::Quit,
-                _ => (),
-            }
-        }
-    }
+    async fn wait_cancel(&mut self) -> TaskConfirmationOutcome;
 
     /// Waits for the user to:
     /// - Confirm the next step with `Enter`
     /// - or to go back to the previous step with `Esc`
     /// - or to quit the application with `q`
-    pub async fn wait_confirm(&self) -> ConfirmOutcome {
-        loop {
-            match Self::key_m(&self.get_main_input().await) {
-                Self::NEXT => break ConfirmOutcome::Confirmed,
-                Self::PREV => break ConfirmOutcome::Canceled,
-                Self::QUIT => break ConfirmOutcome::Quit,
-                _ => (),
-            }
-        }
-    }
+    async fn confirm(&mut self, label: &str) -> TaskConfirmationOutcome;
+
+    async fn input(&mut self, label: &str, current: &str) -> TaskInputOutcome;
 
     /// Swallows all key presses
-    pub async fn swallow(&self) -> ! {
-        loop {
-            self.get_main_input().await;
-        }
+    async fn swallow(&mut self) -> !;
+}
+
+impl<T> TaskInput for &mut T
+where
+    T: TaskInput,
+{
+    async fn wait_cancel(&mut self) -> TaskConfirmationOutcome {
+        TaskInput::wait_cancel(*self).await
     }
 
-    /// Gets the next key press event in case the main input is active
-    /// Waits until the main input is activated otherwise
-    pub async fn get_main_input(&self) -> KeyEvent {
-        self.get(true, &self.input_changed_main).await
+    async fn confirm(&mut self, label: &str) -> TaskConfirmationOutcome {
+        TaskInput::confirm(*self, label).await
     }
 
-    //
-    // Log input methods
-    //
-
-    /// Gets the next key press event in case the log input is active
-    /// Waits until the log input is activated otherwise
-    pub async fn get_log_input(&self) -> KeyEvent {
-        self.get(false, &self.input_changed_log).await
+    async fn input(&mut self, label: &str, current: &str) -> TaskInputOutcome {
+        TaskInput::input(*self, label, current).await
     }
 
-    //
-    // Utils
-    //
-
-    /// Gets the next key press event either for the main input or for the log input
-    /// depending on the value of the `main` parameter
-    async fn get(&self, main: bool, signal: &Signal<impl RawMutex, ()>) -> KeyEvent {
-        loop {
-            if self.model.access(|inner| {
-                main != matches!(inner.logs.buffered.layout(), BufferedLogsLayout::Fullscreen)
-            }) {
-                if let Either::Second(key) = select(signal.wait(), self.get_any()).await {
-                    return key;
-                }
-            } else {
-                signal.wait().await;
-            }
-        }
-    }
-
-    /// Gets the next key press event
-    async fn get_any(&self) -> KeyEvent {
-        self.pump.start();
-
-        loop {
-            match self.pump.state.event.receive().await {
-                // It's important to check that the event is a key press event as
-                // crossterm also emits key release and repeat events on Windows.
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    if Self::key_m(&key) == Self::TOGGLE_LOG || Self::key_m(&key) == Self::WRAP_LOG
-                    {
-                        self.model.modify(|inner| {
-                            let buffered = &mut inner.logs.buffered;
-
-                            if Self::key_m(&key) == Self::TOGGLE_LOG {
-                                buffered.toggle_layout();
-                            } else {
-                                buffered.toggle_wrap();
-                            }
-
-                            self.input_changed_main.signal(());
-                            self.input_changed_log.signal(());
-                        });
-                    } else {
-                        return key;
-                    }
-                }
-                // Fake a dirty model to force redraw on resize
-                Event::Resize(width, height) => self.model.modify(|inner| {
-                    let buffered = &mut inner.logs.buffered;
-                    buffered.set_size(width, height);
-                }),
-                _ => {}
-            }
-        }
-    }
-
-    pub fn key_m(event: &KeyEvent) -> (KeyModifiers, KeyCode) {
-        (event.modifiers, event.code)
+    async fn swallow(&mut self) -> ! {
+        TaskInput::swallow(*self).await
     }
 }
 
-/// A helper for processing input events from the terminal using async code,
-/// by moving the blocking code that poll for events to a dedicated thread
-struct EventsPump {
-    state: Arc<EventsPumpState>,
-    thread_join: std::sync::Mutex<Option<std::thread::JoinHandle<anyhow::Result<()>>>>,
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum LogInputOutcome {
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PgUp,
+    PgDown,
+    LogHome,
+    LogEnd,
 }
 
-impl EventsPump {
-    /// Creates a new `EventsPump` instance
-    fn new() -> Self {
-        Self {
-            state: Arc::new(EventsPumpState::new()),
-            thread_join: std::sync::Mutex::new(None),
-        }
-    }
-
-    /// Starts the event pump thread if not started yet
-    fn start(&self) {
-        let mut thread_join = self.thread_join.lock().unwrap();
-
-        if thread_join.is_none() {
-            let state = self.state.clone();
-
-            *thread_join = Some(std::thread::spawn(move || state.pump_loop()));
-        }
-    }
+pub trait LogInput {
+    async fn get(&mut self) -> LogInputOutcome;
 }
 
-impl Drop for EventsPump {
-    fn drop(&mut self) {
-        self.state.quit.store(true, Ordering::SeqCst);
-
-        if let Some(thread_join) = self.thread_join.lock().unwrap().take() {
-            thread_join.join().unwrap().unwrap();
-        }
+impl<T> LogInput for &mut T
+where
+    T: LogInput,
+{
+    async fn get(&mut self) -> LogInputOutcome {
+        LogInput::get(*self).await
     }
 }
 
-/// The state of the event pump
-struct EventsPumpState {
-    /// The channel for getting events from the terminal
-    /// Up to 10 events can be buffered
-    event: Channel<CriticalSectionRawMutex, Event, 10>,
-    /// A flag indicating whether the event pump thread should quit
-    /// This flag is used to signal the event pump thread to quit when dropping the `EventsPump` instance
-    quit: AtomicBool,
+#[derive(Clone)]
+pub struct Stdin;
+
+impl Stdin {
+    async fn read_line(&mut self) -> String {
+        unblock("read-line", || {
+            let mut line = String::new();
+
+            std::io::stdin().read_line(&mut line)?;
+
+            Ok(line.trim().to_string())
+        })
+        .await
+        .unwrap()
+    }
 }
 
-impl EventsPumpState {
-    /// Creates a new `EventsPumpState` instance
-    const fn new() -> Self {
-        Self {
-            event: Channel::new(),
-            quit: AtomicBool::new(false),
+impl TaskInput for Stdin {
+    async fn wait_cancel(&mut self) -> TaskConfirmationOutcome {
+        core::future::pending().await
+    }
+
+    async fn confirm(&mut self, label: &str) -> TaskConfirmationOutcome {
+        print!("{label}: ");
+        std::io::stdout().flush().unwrap();
+
+        match self.read_line().await.to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => TaskConfirmationOutcome::Confirmed,
+            "c" | "cancel" | "n" | "no" => TaskConfirmationOutcome::Canceled,
+            "q" | "quit" => TaskConfirmationOutcome::Quit,
+            _ => unreachable!(),
         }
     }
 
-    /// The main event pump loop (to be called from the event pump thread)
-    fn pump_loop(&self) -> anyhow::Result<()> {
-        while !self.quit.load(Ordering::SeqCst) {
-            if event::poll(core::time::Duration::from_millis(100))? {
-                futures_lite::future::block_on(self.event.send(event::read()?));
-            }
-        }
+    async fn input(&mut self, label: &str, _current: &str) -> TaskInputOutcome {
+        print!("{label}: ");
+        std::io::stdout().flush().unwrap();
 
-        Ok(())
+        let line = self.read_line().await;
+
+        if line.is_empty() {
+            TaskInputOutcome::StartOver
+        } else {
+            TaskInputOutcome::Done(line)
+        }
+    }
+
+    async fn swallow(&mut self) -> ! {
+        core::future::pending().await
+    }
+}
+
+impl LogInput for Stdin {
+    async fn get(&mut self) -> LogInputOutcome {
+        core::future::pending().await
     }
 }

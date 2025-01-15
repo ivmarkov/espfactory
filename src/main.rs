@@ -179,13 +179,14 @@ fn run() -> anyhow::Result<()> {
 
     log::set_logger(&LOGGER).unwrap();
 
-    std::env::set_var("RUST_LIB_BACKTRACE", "1");
+    if conf.config.print_backtraces {
+        std::env::set_var("RUST_LIB_BACKTRACE", "1");
+    }
 
     futures_lite::future::block_on(
         espfactory::run(
             &conf.config,
             args.verbosity.log_level(),
-            1000, // TODO: Un-hardcode?
             bundle_dir,
             base_loader,
             loader,

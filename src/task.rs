@@ -11,8 +11,6 @@ use alloc::sync::Arc;
 
 use anyhow::Context;
 
-use crossterm::event::KeyCode;
-
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_time::{Duration, Ticker};
 
@@ -25,7 +23,7 @@ use tempfile::NamedTempFile;
 use crate::bundle::{Bundle, Chip, Efuse, Params, ProvisioningStatus};
 use crate::efuse;
 use crate::flash;
-use crate::input::{ConfirmOutcome, Input};
+use crate::input::{TaskConfirmationOutcome, TaskInput, TaskInputOutcome};
 use crate::loader::BundleLoader;
 use crate::model::{FileLogs, Model, Processing, Provision, Readout, State};
 use crate::uploader::BundleLogsUploader;
@@ -99,7 +97,7 @@ where
     /// Arguments:
     /// - `input` - the input helper to process terminal events
     ///   Necessary as some states require direct user input (e.g. readouts)
-    pub async fn run(&mut self, input: &Input<'_>) -> anyhow::Result<()> {
+    pub async fn run(&mut self, input: impl TaskInput + Clone) -> anyhow::Result<()> {
         let result = self.step(input).await;
 
         match result {
@@ -114,7 +112,7 @@ where
         }
     }
 
-    async fn step(&mut self, input: &Input<'_>) -> Result<(), TaskError> {
+    async fn step(&mut self, mut input: impl TaskInput + Clone) -> Result<(), TaskError> {
         loop {
             {
                 self.model.modify(|inner| {
@@ -145,9 +143,9 @@ where
 
                     let result = Self::handle(
                         &self.model.clone(),
-                        self.step1_prepare_efuse_readout(input),
+                        self.step1_prepare_efuse_readout(input.clone()),
                         "Preparing eFuse readouts failed",
-                        input,
+                        &mut input,
                     )
                     .await;
 
@@ -159,7 +157,7 @@ where
 
                     info!("=== => STEP 2: manual readouts");
 
-                    let result = self.step2_readout(input).await;
+                    let result = self.step2_readout(&mut input).await;
 
                     match result {
                         Ok(_) => (),
@@ -188,9 +186,9 @@ where
 
                         let result = Self::handle(
                             &self.model.clone(),
-                            self.step3_prepare(input),
+                            self.step3_prepare(input.clone()),
                             "Preparing a bundle failed",
-                            input,
+                            &mut input,
                         )
                         .await;
 
@@ -212,7 +210,11 @@ where
                     info!("=== => STEP 4: PCB provisioning");
 
                     if !self.conf.skip_confirmations {
-                        match input.wait_confirm().await.into() {
+                        match input
+                            .confirm("Provision? <[Y]es/ENTER, [N]o/[C]ancel, [Q]uit>")
+                            .await
+                            .into()
+                        {
                             Ok(_) => (),
                             Err(TaskError::Canceled) => continue 'steps,
                             Err(TaskError::Retry) => unreachable!(),
@@ -225,9 +227,9 @@ where
 
                     let result = Self::handle(
                         &self.model.clone(),
-                        self.step4_provision(input),
+                        self.step4_provision(input.clone()),
                         &format!("Provisioning bundle `{}` failed", provision.bundle.name),
-                        input,
+                        &mut input,
                     )
                     .await;
 
@@ -260,7 +262,10 @@ where
             }
 
             if !self.conf.skip_confirmations
-                && matches!(input.wait_confirm().await, ConfirmOutcome::Quit)
+                && matches!(
+                    input.confirm("Continue? <Any key, [Q]uit>").await,
+                    TaskConfirmationOutcome::Quit
+                )
             {
                 break;
             }
@@ -275,7 +280,7 @@ where
     /// Displays a progress info while reading the eFuse values
     async fn step1_prepare_efuse_readout(
         &mut self,
-        input: &Input<'_>,
+        input: impl TaskInput,
     ) -> anyhow::Result<(), TaskError> {
         self.model
             .modify(|inner| inner.state = State::Processing(Processing::new(" Read eFuse IDs ")));
@@ -286,7 +291,7 @@ where
     /// Step 2:
     /// Process the readouts state by visualizing the eFuse readouts (if any) and
     /// reading the necessary IDs from the user (if any)
-    async fn step2_readout(&mut self, input: &Input<'_>) -> Result<(), TaskError> {
+    async fn step2_readout(&mut self, mut input: impl TaskInput) -> Result<(), TaskError> {
         let init = |readouts: &mut Readout| {
             readouts.readouts.clear();
             readouts.active = 0;
@@ -318,58 +323,54 @@ where
         let mut result = Ok(());
 
         while result.is_ok() && !self.model.access(|inner| inner.state.readout().is_ready()) {
-            let key = input.get_main_input().await;
+            let (label, value) = self.model.access(|inner| {
+                let readouts = inner.state.readout();
 
-            let log_line = self.model.access_mut(|inner| {
-                let readouts = inner.state.readout_mut();
-
-                let readout = &mut readouts.readouts[readouts.active];
-
-                match Input::key_m(&key) {
-                    Input::NEXT => {
-                        if !readout.1.is_empty() {
-                            readouts.active += 1;
-                            return (
-                                Some(format!("Readout `{}`: `{}`", readout.0, readout.1)),
-                                true,
-                            );
-                        }
-                    }
-                    Input::PREV => {
-                        if readouts.active == 0 && readout.1.is_empty() {
-                            result = Err(TaskError::Canceled);
-                            return (None, false);
-                        }
-
-                        init(readouts);
-                        return (Some("Readouts reset".to_string()), true);
-                    }
-                    Input::QUIT => {
-                        result = Err(TaskError::Quit);
-                        return (None, false);
-                    }
-                    (modifiers, code) => {
-                        if modifiers.is_empty() {
-                            match code {
-                                KeyCode::Backspace => {
-                                    readout.1.pop();
-                                    return (None, true);
-                                }
-                                KeyCode::Char(ch) => {
-                                    readout.1.push(ch);
-                                    return (None, true);
-                                }
-                                _ => (),
-                            }
-                        }
-                    }
-                }
-
-                (None, false)
+                readouts.readouts[readouts.active].clone()
             });
 
-            if let Some(log_line) = log_line {
-                info!("{log_line}");
+            match input.input(&label, &value).await {
+                TaskInputOutcome::Modified(value) => {
+                    self.model.modify(|inner| {
+                        let readouts = inner.state.readout_mut();
+                        readouts.readouts[readouts.active].1 = value;
+                    });
+                }
+                TaskInputOutcome::Done(value) => {
+                    self.model.modify(|inner| {
+                        let readouts = inner.state.readout_mut();
+                        readouts.readouts[readouts.active].1 = value.clone();
+                        readouts.active += 1;
+                    });
+
+                    info!("Readout `{label}`: `{value}`");
+                }
+                TaskInputOutcome::StartOver => {
+                    let reset = self.model.access_mut(|inner| {
+                        let readouts = inner.state.readout_mut();
+
+                        if readouts.active == 0 {
+                            let readouts = inner.state.readout_mut();
+                            init(readouts);
+
+                            (true, true)
+                        } else {
+                            readouts.active -= 1;
+                            readouts.readouts[readouts.active].1.clear();
+
+                            (false, true)
+                        }
+                    });
+
+                    if reset {
+                        info!("All readouts reset");
+                    } else {
+                        info!("Readout `{label}` reset");
+                    }
+                }
+                TaskInputOutcome::Quit => {
+                    result = Err(TaskError::Quit);
+                }
             }
         }
 
@@ -380,7 +381,7 @@ where
     /// Prepare the bundle to be provisioned by loading it from the storage
     async fn step3_prepare(
         &mut self,
-        input: &Input<'_>,
+        input: impl TaskInput,
     ) -> anyhow::Result<Option<String>, TaskError> {
         let (_test_jig_id, pcb_id, box_id) = self.model.access(|inner| {
             let readouts = inner.state.readout();
@@ -437,7 +438,10 @@ where
 
     /// Step 4:
     /// Provision the bundle by flashing and optionally efusing the chip with the bundle content
-    async fn step4_provision(&mut self, input: &Input<'_>) -> anyhow::Result<(), TaskError> {
+    async fn step4_provision(
+        &mut self,
+        mut input: impl TaskInput,
+    ) -> anyhow::Result<(), TaskError> {
         match select(self.prov_bundle(), input.swallow()).await {
             Either::First(result) => result.map_err(TaskError::Other),
         }
@@ -1054,7 +1058,7 @@ where
         model: &Model,
         fut: F,
         err_msg: &str,
-        input: &Input<'_>,
+        mut input: impl TaskInput,
     ) -> anyhow::Result<R, TaskError>
     where
         F: Future<Output = anyhow::Result<R, TaskError>>,
@@ -1070,7 +1074,11 @@ where
                     .error(format!(" {err_msg} "), format!("{err_msg}: {err:?}"))
             });
 
-            match input.wait_confirm().await.into() {
+            match input
+                .confirm("Retry? <[Y]es/ENTER, [N]o/[C]ancel, [Q]uit")
+                .await
+                .into()
+            {
                 Ok(_) => Err(TaskError::Retry),
                 Err(err) => Err(err),
             }
@@ -1080,7 +1088,11 @@ where
     }
 
     /// Process a future by incrementing a counter every 100 ms while the future is running
-    async fn process<F, R>(model: &Model, fut: F, input: &Input<'_>) -> anyhow::Result<R, TaskError>
+    async fn process<F, R>(
+        model: &Model,
+        fut: F,
+        mut input: impl TaskInput,
+    ) -> anyhow::Result<R, TaskError>
     where
         F: Future<Output = anyhow::Result<R>>,
     {
@@ -1206,12 +1218,12 @@ impl From<anyhow::Error> for TaskError {
     }
 }
 
-impl From<ConfirmOutcome> for Result<(), TaskError> {
-    fn from(outcome: ConfirmOutcome) -> Self {
+impl From<TaskConfirmationOutcome> for Result<(), TaskError> {
+    fn from(outcome: TaskConfirmationOutcome) -> Self {
         match outcome {
-            ConfirmOutcome::Confirmed => Ok(()),
-            ConfirmOutcome::Canceled => Err(TaskError::Canceled),
-            ConfirmOutcome::Quit => Err(TaskError::Quit),
+            TaskConfirmationOutcome::Confirmed => Ok(()),
+            TaskConfirmationOutcome::Canceled => Err(TaskError::Canceled),
+            TaskConfirmationOutcome::Quit => Err(TaskError::Quit),
         }
     }
 }
