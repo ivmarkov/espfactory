@@ -10,7 +10,7 @@ description = "A utility for flashing/provisioning ESP32 PCBs at the factory pre
 repository = "https://github.com/ivmarkov/espfactory"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-rust-version = "1.82"
+rust-version = "1.84"
 
 [profile.release]
 debug = true # So that we get meaningful stacktraces even in release
