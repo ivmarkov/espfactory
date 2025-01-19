@@ -106,8 +106,8 @@ where
                 Ok(())
             }
             Err(TaskError::Other(err)) => Err(err)?,
-            Ok(_) | Err(TaskError::Canceled) | Err(TaskError::Retry) => {
-                unreachable!("Task canceled or retry by user request");
+            Ok(_) | Err(TaskError::Canceled) | Err(TaskError::Retry) | Err(TaskError::Skipped) => {
+                unreachable!("Task canceled/retried/skipped by user request");
             }
         }
     }
@@ -145,12 +145,24 @@ where
                         &self.model.clone(),
                         self.step1_prepare_efuse_readout(input.clone()),
                         "Preparing eFuse readouts failed",
+                        true,
                         &mut input,
                     )
                     .await;
 
                     match result {
                         Ok(_) => (),
+                        Err(TaskError::Skipped) => {
+                            // Prepare empty readouts
+                            self.model.modify(move |inner| {
+                                let efuse_values =
+                                    vec![("EFUSE_READOUT_FAILED".to_string(), "Y".to_string())];
+
+                                inner.state = State::Readout(Readout::new_with_efuse(efuse_values))
+                            });
+
+                            warn!("eFuse readouts skipped");
+                        }
                         Err(TaskError::Canceled) | Err(TaskError::Retry) => continue,
                         Err(other) => Err(other)?,
                     }
@@ -193,6 +205,7 @@ where
                             &self.model.clone(),
                             self.step3_prepare(input.clone()),
                             "Preparing a bundle failed",
+                            false,
                             &mut input,
                         )
                         .await;
@@ -234,6 +247,7 @@ where
                         &self.model.clone(),
                         self.step4_provision(input.clone()),
                         &format!("Provisioning bundle `{}` failed", provision.bundle.name),
+                        false,
                         &mut input,
                     )
                     .await;
@@ -1084,6 +1098,7 @@ where
         model: &Model,
         fut: F,
         err_msg: &str,
+        ignore_allowed: bool,
         mut input: impl TaskInput,
     ) -> anyhow::Result<R, TaskError>
     where
@@ -1100,13 +1115,24 @@ where
                     .error(format!(" {err_msg} "), format!("{err_msg}: {err:?}"))
             });
 
-            match input
-                .confirm("Retry? <[Y]es/ENTER, [N]o/[C]ancel, [Q]uit")
-                .await
-                .into()
-            {
-                Ok(_) => Err(TaskError::Retry),
-                Err(err) => Err(err),
+            if ignore_allowed {
+                match input
+                    .confirm_or_skip("Retry? <[Y]es/ENTER, [N]o/[C]ancel, [I]gnore, [Q]uit")
+                    .await
+                    .into()
+                {
+                    Ok(_) => Err(TaskError::Retry),
+                    Err(err) => Err(err),
+                }
+            } else {
+                match input
+                    .confirm("Retry? <[Y]es/ENTER, [N]o/[C]ancel, [Q]uit")
+                    .await
+                    .into()
+                {
+                    Ok(_) => Err(TaskError::Retry),
+                    Err(err) => Err(err),
+                }
             }
         } else {
             result
@@ -1232,6 +1258,8 @@ enum TaskError {
     Retry,
     /// Go to the previous step by user request
     Canceled,
+    /// Step skipped by user request
+    Skipped,
     /// Quit the app by user request
     Quit,
     /// Other error - display the error message or quit the app depending on the context
@@ -1249,6 +1277,7 @@ impl From<TaskConfirmationOutcome> for Result<(), TaskError> {
         match outcome {
             TaskConfirmationOutcome::Confirmed => Ok(()),
             TaskConfirmationOutcome::Canceled => Err(TaskError::Canceled),
+            TaskConfirmationOutcome::Skipped => Err(TaskError::Skipped),
             TaskConfirmationOutcome::Quit => Err(TaskError::Quit),
         }
     }
@@ -1259,6 +1288,7 @@ impl Display for TaskError {
         match self {
             TaskError::Retry => write!(f, "Retry"),
             TaskError::Canceled => write!(f, "Canceled"),
+            TaskError::Skipped => write!(f, "Skipped"),
             TaskError::Quit => write!(f, "Quit"),
             TaskError::Other(err) => write!(f, "Error: {err:#}"),
         }

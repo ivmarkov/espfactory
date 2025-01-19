@@ -27,6 +27,7 @@ impl<'a> Input<'a> {
     const PREV: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Esc);
     const NEXT: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Enter);
     const QUIT: (KeyModifiers, KeyCode) = (KeyModifiers::ALT, KeyCode::Char('q'));
+    const SKIP: (KeyModifiers, KeyCode) = (KeyModifiers::ALT, KeyCode::Char('i'));
 
     const UP: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Up);
     const DOWN: (KeyModifiers, KeyCode) = (KeyModifiers::empty(), KeyCode::Down);
@@ -142,6 +143,18 @@ impl TaskInput for &Input<'_> {
                 Input::NEXT => break TaskConfirmationOutcome::Confirmed,
                 Input::PREV => break TaskConfirmationOutcome::Canceled,
                 Input::QUIT => break TaskConfirmationOutcome::Quit,
+                _ => (),
+            }
+        }
+    }
+
+    async fn confirm_or_skip(&mut self, _label: &str) -> TaskConfirmationOutcome {
+        loop {
+            match Input::key_m(&self.get_main_input().await) {
+                Input::NEXT => break TaskConfirmationOutcome::Confirmed,
+                Input::PREV => break TaskConfirmationOutcome::Canceled,
+                Input::QUIT => break TaskConfirmationOutcome::Quit,
+                Input::SKIP => break TaskConfirmationOutcome::Skipped,
                 _ => (),
             }
         }

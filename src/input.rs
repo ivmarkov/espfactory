@@ -7,6 +7,7 @@ use crate::utils::futures::unblock;
 pub enum TaskConfirmationOutcome {
     Confirmed,
     Canceled,
+    Skipped,
     Quit,
 }
 
@@ -26,10 +27,17 @@ pub trait TaskInput {
     async fn wait_cancel(&mut self) -> TaskConfirmationOutcome;
 
     /// Waits for the user to:
-    /// - Confirm the next step with `Enter`
-    /// - or to go back to the previous step with `Esc`
-    /// - or to quit the application with `q`
+    /// - Confirm the next step
+    /// - or to go back to the previous step
+    /// - or to quit the application
     async fn confirm(&mut self, label: &str) -> TaskConfirmationOutcome;
+
+    /// Waits for the user to:
+    /// - Confirm the next step
+    /// - or to go back to the previous step
+    /// - or to skip the current step
+    /// - or to quit the application
+    async fn confirm_or_skip(&mut self, label: &str) -> TaskConfirmationOutcome;
 
     async fn input(&mut self, label: &str, current: &str) -> TaskInputOutcome;
 
@@ -47,6 +55,10 @@ where
 
     async fn confirm(&mut self, label: &str) -> TaskConfirmationOutcome {
         TaskInput::confirm(*self, label).await
+    }
+
+    async fn confirm_or_skip(&mut self, label: &str) -> TaskConfirmationOutcome {
+        TaskInput::confirm_or_skip(*self, label).await
     }
 
     async fn input(&mut self, label: &str, current: &str) -> TaskInputOutcome {
@@ -114,6 +126,19 @@ impl TaskInput for Stdin {
         match self.read_line().await.to_ascii_lowercase().as_str() {
             "" | "y" | "yes" => TaskConfirmationOutcome::Confirmed,
             "c" | "cancel" | "n" | "no" => TaskConfirmationOutcome::Canceled,
+            "q" | "quit" => TaskConfirmationOutcome::Quit,
+            _ => unreachable!(),
+        }
+    }
+
+    async fn confirm_or_skip(&mut self, label: &str) -> TaskConfirmationOutcome {
+        print!("{label}: ");
+        std::io::stdout().flush().unwrap();
+
+        match self.read_line().await.to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => TaskConfirmationOutcome::Confirmed,
+            "c" | "cancel" | "n" | "no" => TaskConfirmationOutcome::Canceled,
+            "s" | "skip" | "i" | "ignore" => TaskConfirmationOutcome::Skipped,
             "q" | "quit" => TaskConfirmationOutcome::Quit,
             _ => unreachable!(),
         }
