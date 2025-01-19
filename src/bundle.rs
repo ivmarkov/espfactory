@@ -1190,7 +1190,7 @@ pub enum ProvisioningStatus {
     /// The provisioning process is pending
     Pending,
     /// The provisioning process is in progress
-    InProgress(u8),
+    InProgress(Option<u8>),
     /// The provisioning process has been completed
     Done,
 }
@@ -1200,7 +1200,13 @@ impl Display for ProvisioningStatus {
         match self {
             Self::NotStarted => write!(f, "Not started"),
             Self::Pending => write!(f, "Pending"),
-            Self::InProgress(progress) => write!(f, "In progress ({:.0}%)", *progress as f64),
+            Self::InProgress(progress) => {
+                if let Some(progress) = progress {
+                    write!(f, "In progress ({:.0}%)", *progress as f64)
+                } else {
+                    write!(f, "In progress")
+                }
+            }
             Self::Done => write!(f, "Done"),
         }
     }

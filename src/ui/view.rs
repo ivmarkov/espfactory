@@ -185,7 +185,13 @@ impl Provision {
         match status {
             Some(ProvisioningStatus::NotStarted) => "Not Started".into(),
             Some(ProvisioningStatus::Pending) => "Pending".into(),
-            Some(ProvisioningStatus::InProgress(progress)) => format!("{}%", progress),
+            Some(ProvisioningStatus::InProgress(progress)) => {
+                if let Some(progress) = progress {
+                    format!("{}%", progress)
+                } else {
+                    "In Progress".into()
+                }
+            }
             Some(ProvisioningStatus::Done) => "Done".into(),
             None => "-".into(),
         }

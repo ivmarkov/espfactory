@@ -711,22 +711,36 @@ where
         );
 
         let flash_use_stub = !self.conf.flash_no_stub;
+        let flash_esptool = self.conf.flash_esptool;
         let flash_port = self.conf.port.clone();
         let flash_speed = self.conf.flash_speed;
         let flash_model = self.model.clone();
         let flash_dry_run = self.conf.flash_dry_run;
 
         unblock("flash", move || {
-            flash::flash(
-                flash_port.as_deref(),
-                chip,
-                flash_use_stub,
-                flash_speed,
-                flash_size,
-                flash_data,
-                flash_dry_run,
-                FlashProgress::new(flash_model),
-            )
+            if flash_esptool {
+                flash::flash_esptool(
+                    flash_port.as_deref(),
+                    chip,
+                    flash_use_stub,
+                    flash_speed,
+                    flash_size,
+                    flash_data,
+                    flash_dry_run,
+                    FlashProgress::new(flash_model),
+                )
+            } else {
+                flash::flash(
+                    flash_port.as_deref(),
+                    chip,
+                    flash_use_stub,
+                    flash_speed,
+                    flash_size,
+                    flash_data,
+                    flash_dry_run,
+                    FlashProgress::new(flash_model),
+                )
+            }
         })
         .await?;
 
@@ -1213,7 +1227,7 @@ impl ProgressCallbacks for FlashProgress {
                 .state
                 .provision_mut()
                 .bundle
-                .set_status(addr, ProvisioningStatus::InProgress(0));
+                .set_status(addr, ProvisioningStatus::InProgress(None));
 
             ((), notify)
         });
@@ -1226,7 +1240,7 @@ impl ProgressCallbacks for FlashProgress {
             self.model.access_mut(|inner| {
                 let notify = inner.state.provision_mut().bundle.set_status(
                     addr,
-                    ProvisioningStatus::InProgress((current * 100 / total) as u8),
+                    ProvisioningStatus::InProgress(Some((current * 100 / total) as u8)),
                 );
 
                 ((), notify)

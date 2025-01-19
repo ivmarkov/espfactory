@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::process::Command;
 
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
@@ -14,6 +15,7 @@ use espflash::targets::XtalFrequency;
 use log::{info, warn};
 
 use serialport::{FlowControl, SerialPortInfo, SerialPortType, UsbPortInfo};
+use tempfile::NamedTempFile;
 
 use crate::bundle::{Chip, FlashData};
 
@@ -110,6 +112,84 @@ where
             .context("Flashing failed")?;
     } else {
         warn!("Flash dry run mode: flashing skipped");
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn flash_esptool<P>(
+    port: Option<&str>,
+    chip: Chip,
+    _use_stub: bool,
+    speed: Option<u32>,
+    flash_size: Option<FlashSize>,
+    flash_data: Vec<FlashData>,
+    dry_run: bool,
+    mut progress: P,
+) -> anyhow::Result<()>
+where
+    P: ProgressCallbacks + Send + Sync + 'static,
+{
+    for flash_data in &flash_data {
+        let mut data_temp_file =
+            NamedTempFile::new().context("Creating a temporary file failed")?;
+
+        data_temp_file
+            .write_all(&flash_data.data)
+            .context("Writing the binary image to a temporary file failed")?;
+
+        data_temp_file
+            .flush()
+            .context("Flushing the temporary file failed")?;
+
+        progress.init(flash_data.offset, flash_data.data.len());
+
+        let mut command = Command::new(esptools::Tool::EspTool.mount()?.path());
+
+        command.arg("--chip").arg(chip.as_tools_str());
+
+        if let Some(port) = port {
+            command.arg("--port").arg(port);
+        }
+
+        if let Some(speed) = speed {
+            command.arg("--baud").arg(speed.to_string());
+        }
+
+        command
+            .arg("write_flash")
+            .arg(format!("0x{:x}", flash_data.offset))
+            .arg(data_temp_file.path());
+
+        if let Some(flash_size) = flash_size {
+            command.arg("--flash_size").arg(format!("{flash_size}"));
+        }
+
+        // Necessary for chips in Secure Download Mode
+        command.arg("--force");
+
+        if !dry_run {
+            warn!("About to execute `esptool.py` command `{command:?}`...");
+
+            let output = command.output().with_context(|| {
+                format!("Executing `esptool.py` with command `{command:?}` failed")
+            })?;
+
+            if !output.status.success() {
+                anyhow::bail!(
+                    "`{command:?}` command failed with status: {}.\nStderr output:\n{}",
+                    output.status,
+                    core::str::from_utf8(&output.stderr).unwrap_or("???")
+                );
+            }
+
+            info!("`esptool.py` command `{command:?}` executed.");
+        } else {
+            warn!("Flash dry run mode: flashing skipped");
+        }
+
+        progress.finish();
     }
 
     Ok(())
