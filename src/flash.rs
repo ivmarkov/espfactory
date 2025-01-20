@@ -87,7 +87,7 @@ pub fn flash<P>(
     flash_size: Option<FlashSize>,
     flash_data: Vec<FlashData>,
     dry_run: bool,
-    mut progress: P,
+    progress: &mut P,
 ) -> anyhow::Result<()>
 where
     P: ProgressCallbacks + Send + Sync + 'static,
@@ -108,7 +108,7 @@ where
 
     if !dry_run {
         flasher
-            .write_bins_to_flash(&segments, Some(&mut progress))
+            .write_bins_to_flash(&segments, Some(progress))
             .context("Flashing failed")?;
     } else {
         warn!("Flash dry run mode: flashing skipped");
@@ -118,15 +118,39 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn erase(
+    port: Option<&str>,
+    chip: Chip,
+    use_stub: bool,
+    speed: Option<u32>,
+    flash_size: Option<FlashSize>,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    let mut flasher = new(port, chip, use_stub, speed)?;
+
+    if let Some(flash_size) = flash_size {
+        flasher.set_flash_size(flash_size);
+    }
+
+    if !dry_run {
+        flasher.erase_flash().context("Erasing flash failed")?;
+    } else {
+        warn!("Flash dry run mode: erasing flash skipped");
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn flash_esptool<P>(
     port: Option<&str>,
     chip: Chip,
-    _use_stub: bool,
+    use_stub: bool,
     speed: Option<u32>,
     flash_size: Option<FlashSize>,
     flash_data: Vec<FlashData>,
     dry_run: bool,
-    mut progress: P,
+    progress: &mut P,
 ) -> anyhow::Result<()>
 where
     P: ProgressCallbacks + Send + Sync + 'static,
@@ -148,6 +172,10 @@ where
         let mut command = Command::new(esptools::Tool::EspTool.mount()?.path());
 
         command.arg("--chip").arg(chip.as_tools_str());
+
+        if !use_stub {
+            command.arg("--no-stub");
+        }
 
         if let Some(port) = port {
             command.arg("--port").arg(port);
@@ -190,6 +218,60 @@ where
         }
 
         progress.finish();
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn erase_esptool(
+    port: Option<&str>,
+    chip: Chip,
+    use_stub: bool,
+    speed: Option<u32>,
+    _flash_size: Option<FlashSize>,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    let mut command = Command::new(esptools::Tool::EspTool.mount()?.path());
+
+    command.arg("--chip").arg(chip.as_tools_str());
+
+    if !use_stub {
+        command.arg("--no-stub");
+    }
+
+    if let Some(port) = port {
+        command.arg("--port").arg(port);
+    }
+
+    if let Some(speed) = speed {
+        command.arg("--baud").arg(speed.to_string());
+    }
+
+    command.arg("erase_flash");
+
+    // Necessary for chips in Secure Download Mode
+    command.arg("--force");
+
+    if !dry_run {
+        warn!("About to execute `esptool.py` command `{command:?}`...");
+
+        let output = command
+            .output()
+            .with_context(|| format!("Executing `esptool.py` with command `{command:?}` failed"))?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "`{command:?}` command failed with status: {}.\nStderr output:\n{}Stdout output:\n{}",
+                output.status,
+                core::str::from_utf8(&output.stderr).unwrap_or("???"),
+                core::str::from_utf8(&output.stdout).unwrap_or("???")
+            );
+        }
+
+        info!("`esptool.py` command `{command:?}` executed.");
+    } else {
+        warn!("Flash dry run mode: erasing flash skipped");
     }
 
     Ok(())

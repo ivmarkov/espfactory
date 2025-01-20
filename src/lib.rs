@@ -59,6 +59,9 @@ pub struct Config {
     /// Do not use a stub when flashing
     #[serde(default)]
     pub flash_no_stub: bool,
+    /// Erase flash prior to flashing
+    #[serde(default)]
+    pub flash_erase: bool,
     /// Use `esptool.py` for flashing the device
     #[serde(default)]
     pub flash_esptool: bool,
@@ -134,6 +137,7 @@ impl Config {
             efuse_protect_digests: false,
             port: None,
             flash_no_stub: false,
+            flash_erase: false,
             flash_esptool: false,
             flash_encrypt: false,
             flash_speed: None,

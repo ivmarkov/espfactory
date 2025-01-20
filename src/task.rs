@@ -696,12 +696,17 @@ where
             }
         }
 
+        if self.conf.flash_erase {
+            info!("About to erase flash: Chip={chip:?}, Flash Size={flash_size:?}");
+        }
+
         info!(
             "About to flash data: Chip={chip:?}, Flash Size={flash_size:?}, Images N={}",
             flash_data.len()
         );
 
         let flash_use_stub = !self.conf.flash_no_stub;
+        let flash_erase = self.conf.flash_erase;
         let flash_esptool = self.conf.flash_esptool;
         let flash_port = self.conf.port.clone();
         let flash_speed = self.conf.flash_speed;
@@ -709,7 +714,20 @@ where
         let flash_dry_run = self.conf.flash_dry_run;
 
         unblock("flash", move || {
+            let mut progress = FlashProgress::new(flash_model);
+
             if flash_esptool {
+                if flash_erase {
+                    flash::erase_esptool(
+                        flash_port.as_deref(),
+                        chip,
+                        flash_use_stub,
+                        flash_speed,
+                        flash_size,
+                        flash_dry_run,
+                    )?;
+                }
+
                 flash::flash_esptool(
                     flash_port.as_deref(),
                     chip,
@@ -718,9 +736,20 @@ where
                     flash_size,
                     flash_data,
                     flash_dry_run,
-                    FlashProgress::new(flash_model),
+                    &mut progress,
                 )
             } else {
+                if flash_erase {
+                    flash::erase(
+                        flash_port.as_deref(),
+                        chip,
+                        flash_use_stub,
+                        flash_speed,
+                        flash_size,
+                        flash_dry_run,
+                    )?;
+                }
+
                 flash::flash(
                     flash_port.as_deref(),
                     chip,
@@ -729,7 +758,7 @@ where
                     flash_size,
                     flash_data,
                     flash_dry_run,
-                    FlashProgress::new(flash_model),
+                    &mut progress,
                 )
             }
         })
