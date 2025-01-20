@@ -172,11 +172,6 @@ fn run() -> anyhow::Result<()> {
         .map(LogsUploader::new)
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    let project_dirs = directories::ProjectDirs::from("org", "ivmarkov", "espfactory")
-        .ok_or_else(|| anyhow::anyhow!("Cannot mount project directories"))?;
-
-    let bundle_dir = &project_dirs.cache_dir().join("bundle");
-
     log::set_logger(&LOGGER).unwrap();
 
     if conf.config.print_backtraces {
@@ -187,7 +182,6 @@ fn run() -> anyhow::Result<()> {
         espfactory::run(
             &conf.config,
             args.verbosity.log_level(),
-            bundle_dir,
             base_loader,
             loader,
             MultilogsUploader(&mut logs_uploaders),

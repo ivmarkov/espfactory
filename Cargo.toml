@@ -21,7 +21,7 @@ required-features = ["bin"]
 
 [features]
 default = ["bin", "s3"]
-bin = ["directories", "clap", "async-compat"]
+bin = ["clap", "async-compat"]
 libudev = ["espflash/libudev", "serialport/libudev"]
 s3 = ["aws-config", "aws-sdk-s3"]
 
@@ -49,7 +49,6 @@ toml = "0.8"
 csv = "1.3"
 bitflags = "2"
 env_logger = "0.11"
-directories = { version = "3", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "blocking"] }
 aws-config = { version = "1.1", features = ["behavior-version-latest"], optional = true }
 aws-sdk-s3 = { version = "1.65", optional = true }

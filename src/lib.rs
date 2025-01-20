@@ -1,7 +1,5 @@
 #![allow(async_fn_in_trait)]
 
-use std::path::Path;
-
 use alloc::sync::Arc;
 
 use embassy_futures::select::select3;
@@ -199,7 +197,6 @@ pub enum BundleIdentification {
 pub async fn run<B, L, U>(
     conf: &Config,
     log_level: log::LevelFilter,
-    bundle_dir: &Path,
     bundle_base_loader: Option<B>,
     bundle_loader: L,
     bundle_logs_uploader: U,
@@ -239,7 +236,6 @@ where
             Task::new(
                 model.clone(),
                 conf,
-                bundle_dir,
                 bundle_base_loader,
                 bundle_loader,
                 bundle_logs_uploader,
@@ -253,7 +249,6 @@ where
         Task::new(
             model.clone(),
             conf,
-            bundle_dir,
             bundle_base_loader,
             bundle_loader,
             bundle_logs_uploader,
