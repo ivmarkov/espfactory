@@ -12,6 +12,10 @@ jobs:
     name: Publish
     runs-on: ubuntu-latest
     steps:
+      - name: Setup | Install libudev-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install libudev-dev
       - name: Setup | Checkout
         uses: actions/checkout@v2
       - name: Setup | Rust
