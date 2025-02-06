@@ -164,6 +164,30 @@ impl Config {
             log_buffer_len: 1000,
         }
     }
+
+    /// Change the configuration so that it does the right thing
+    /// if the chip was already provisioned
+    pub fn reprovision(&mut self) {
+        // eFUSEs were most likely burned already, set dry run mode
+        self.efuse_dry_run = true;
+        // Erase flash so that OTA partitions, phy-init, coredump and so on are reset
+        self.flash_erase = true;
+    }
+
+    /// Change the configuration so that it does the right thing
+    /// if the chip already has Secure Download mode enabled
+    pub fn secure_download(&mut self) {
+        // eFUSEs were most likely burned already, set dry run mode
+        self.efuse_dry_run = true;
+        // Flash erasing does not work in Secure Download mode, disable
+        self.flash_erase = false;
+        // Flash stub does not work in Secure Download mode, disable
+        self.flash_no_stub = true;
+        // `espflash` does not work in Secure Download mode, disable
+        self.flash_esptool = true;
+        // Flash erase does not work in Secure Download mode, use reset empty partitions instead
+        self.reset_empty_partitions = true;
+    }
 }
 
 impl Default for Config {

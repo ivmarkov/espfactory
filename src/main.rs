@@ -29,6 +29,16 @@ struct Cli {
     #[arg(short = 'c', long)]
     conf: Option<PathBuf>,
 
+    /// Assume the chip was already provisioned once, and adjust all configuration settings
+    /// so that subsequent provisioning is still possible
+    #[arg(short = 'r', long)]
+    reprovision: bool,
+
+    /// Assume Secure Download is already enabled on the chip, and adjust all configuration settings
+    /// so that subsequent provisioning is still possible
+    #[arg(short = 's', long)]
+    secure_download: bool,
+
     /// Base bundle URL - the URL where the factory will look for a base bundle to load.
     /// Supported URL schemes:
     /// `file:` - load a base bundle from a file;
@@ -125,7 +135,7 @@ fn run() -> anyhow::Result<()> {
 
     log::set_max_level(LevelFilter::Debug);
 
-    let conf = if let Some(conf) = args.conf {
+    let mut conf = if let Some(conf) = args.conf {
         println!("Loading configuration from `{}`", conf.display());
         toml::from_str(&std::fs::read_to_string(conf)?).context("Invalid configuiration format")?
     } else if let Ok(current_exe) = std::env::current_exe() {
@@ -142,6 +152,14 @@ fn run() -> anyhow::Result<()> {
         println!("Using default configuration");
         Config::new()
     };
+
+    if args.reprovision {
+        conf.config.reprovision();
+    }
+
+    if args.secure_download {
+        conf.config.secure_download();
+    }
 
     let base_loader_url = args.base_url.or_else(|| conf.base_url.clone());
 
