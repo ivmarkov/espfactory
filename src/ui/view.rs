@@ -9,7 +9,7 @@ use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Widget, Wrap};
 use ratatui::DefaultTerminal;
 
-use crate::bundle::{Bundle, Efuse, ProvisioningStatus};
+use crate::bundle::{Bundle, Efuse, ImageType, ProvisioningStatus};
 use crate::model::{
     BufferedLogs, BufferedLogsLayout, Logs, Model, ModelInner, Processing, Provision, Readout,
     State, Status,
@@ -262,13 +262,25 @@ impl Widget for &Provision {
                         ))
                         .right_aligned()
                         .into(),
-                        if partition.encrypted() {
-                            "Encrypted"
-                        } else {
-                            "-"
-                        }
-                        .to_string()
-                        .into(),
+                        {
+                            let str = partition
+                                .encrypted()
+                                .then_some("Encr")
+                                .into_iter()
+                                .chain(
+                                    mapping
+                                        .image
+                                        .as_ref()
+                                        .map(|image| matches!(image.ty, ImageType::Empty))
+                                        .unwrap_or(false)
+                                        .then_some("Empty")
+                                        .into_iter(),
+                                )
+                                .collect::<Vec<_>>()
+                                .join(", ");
+
+                            if str.is_empty() { "-".into() } else { str }.into()
+                        },
                         Text::raw(
                             mapping
                                 .image
@@ -323,7 +335,7 @@ impl Widget for &Provision {
                 Constraint::Length(10),
                 Constraint::Length(10),
                 Constraint::Length(17),
-                Constraint::Length(15),
+                Constraint::Length(18),
                 Constraint::Length(17),
                 Constraint::Length(11),
             ],

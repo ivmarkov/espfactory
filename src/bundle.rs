@@ -18,7 +18,7 @@ use serde::Deserialize;
 
 use zip::ZipArchive;
 
-use crate::flash;
+use crate::flash::{self, empty_space};
 use crate::loader::BundleType;
 
 extern crate alloc;
@@ -466,7 +466,7 @@ extra_1,  data, 0x06,            ,   20K,
                 let image = if let Entry::Occupied(entry) = images.entry(partition.name()) {
                     let image = entry.remove();
 
-                    if image.elf {
+                    if matches!(image.ty, ImageType::Elf) {
                         if matches!(partition.ty(), Type::App) {
                             warn!("ELF image found for partition `{}`, prefer `.bin` files, as they take less space", partition.name());
                         } else {
@@ -584,6 +584,16 @@ extra_1,  data, 0x06,            ,   20K,
         Ok(())
     }
 
+    pub fn add_empty(&mut self) {
+        for mapping in &mut self.parts_mapping {
+            if let Some(partition) = mapping.partition.as_ref() {
+                if mapping.image.is_none() {
+                    mapping.image = Some(Image::new_empty(partition.size() as _));
+                }
+            }
+        }
+    }
+
     /// Return `true` if the bundle is bootable, i.e. has a partition table, a bootloader, and an app image
     pub fn is_bootable(&self) -> bool {
         self.has_part_table() && self.has_bootloader() && self.has_app_image()
@@ -636,7 +646,7 @@ extra_1,  data, 0x06,            ,   20K,
 
     /// Get the flash data to be flashed to the device
     pub(crate) fn get_flash_data(&self) -> impl Iterator<Item = FlashData> + '_ {
-        self.parts_mapping.iter().filter_map(|mapping| {
+        self.parts_mapping.iter().filter_map(move |mapping| {
             mapping.partition.as_ref().and_then(|partition| {
                 mapping.image.as_ref().map(|image| FlashData {
                     offset: partition.offset(),
@@ -1131,17 +1141,38 @@ impl Display for EfuseMapping {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum ImageType {
+    /// An ELF image
+    Elf,
+    /// A binary image
+    Binary,
+    /// An empty space (0xff bytes)
+    Empty,
+}
+
+impl Display for ImageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Elf => write!(f, "ELF"),
+            Self::Binary => write!(f, "Binary"),
+            Self::Empty => write!(f, "Empty"),
+        }
+    }
+}
+
 /// An image to be flashed to some partition
 #[derive(Debug, Clone)]
 pub struct Image {
     /// The name of the image
     pub name: String,
-    /// The data of the image
-    pub data: Arc<Vec<u8>>,
-    /// Was the image originally provided as an ELF file
+    /// Image type
     /// Only necessary to know for some sanity checks done during bundle loading,
     /// as in trying to associate an ELF image to a non-App partition
-    pub elf: bool,
+    /// as well as for the UI
+    pub ty: ImageType,
+    /// The data of the image
+    pub data: Arc<Vec<u8>>,
     /// The status of the image flashing
     pub status: ProvisioningStatus,
 }
@@ -1152,8 +1183,8 @@ impl Image {
     pub fn new(name: String, data: Vec<u8>) -> Self {
         Self {
             name,
+            ty: ImageType::Binary,
             data: Arc::new(data),
-            elf: false,
             status: ProvisioningStatus::NotStarted,
         }
     }
@@ -1163,8 +1194,18 @@ impl Image {
     pub fn new_elf(name: String, data: Vec<u8>) -> Self {
         Self {
             name,
+            ty: ImageType::Elf,
             data: Arc::new(data),
-            elf: true,
+            status: ProvisioningStatus::NotStarted,
+        }
+    }
+
+    /// Create a new `Image` with empty space of the given size
+    pub fn new_empty(size: usize) -> Self {
+        Self {
+            name: "(Empty)".into(),
+            ty: ImageType::Empty,
+            data: Arc::new(empty_space(size)),
             status: ProvisioningStatus::NotStarted,
         }
     }
@@ -1174,8 +1215,10 @@ impl Display for Image {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}({}B", self.name, self.data.len())?;
 
-        if self.elf {
-            write!(f, " ELF")?;
+        match self.ty {
+            ImageType::Binary => (),
+            ImageType::Elf => write!(f, " ELF")?,
+            ImageType::Empty => write!(f, " Empty")?,
         }
 
         write!(f, ")")

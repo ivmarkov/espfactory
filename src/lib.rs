@@ -1,5 +1,4 @@
 #![allow(async_fn_in_trait)]
-use core::fmt::{self, Display};
 
 use alloc::sync::Arc;
 
@@ -29,24 +28,6 @@ mod model;
 mod task;
 mod ui;
 mod utils;
-
-/// The method used to erase the flash
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum FlashEraseType {
-    /// Standard; only works if Secure Download mode is not enabled
-    Standard,
-    /// By writing 0xff to the flash
-    Write,
-}
-
-impl Display for FlashEraseType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Standard => write!(f, "Standard"),
-            Self::Write => write!(f, "Write 0xff bytes"),
-        }
-    }
-}
 
 /// The configuration of the factory
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -79,8 +60,15 @@ pub struct Config {
     #[serde(default)]
     pub flash_no_stub: bool,
     /// Erase flash prior to flashing
+    /// Only works if Secure Download mode is not enabled
     #[serde(default)]
-    pub flash_erase: Option<FlashEraseType>,
+    pub flash_erase: bool,
+    /// Reset empty partitions by writing 0xff to the entire partition
+    /// Works also when Secure Download mode is enabled
+    /// For encrypted partitions, will write pre-encrypted 0xff sequences
+    /// (Else ESP-IDF might complain for reading bogus data from those)
+    #[serde(default)]
+    pub reset_empty_partitions: bool,
     /// Use `esptool.py` for flashing the device
     #[serde(default)]
     pub flash_esptool: bool,
@@ -156,7 +144,8 @@ impl Config {
             efuse_protect_digests: false,
             port: None,
             flash_no_stub: false,
-            flash_erase: None,
+            flash_erase: false,
+            reset_empty_partitions: false,
             flash_esptool: false,
             flash_encrypt: false,
             flash_speed: None,

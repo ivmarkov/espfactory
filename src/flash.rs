@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::Write;
 use std::process::Command;
 
@@ -18,7 +19,6 @@ use serialport::{FlowControl, SerialPortInfo, SerialPortType, UsbPortInfo};
 use tempfile::NamedTempFile;
 
 use crate::bundle::{Chip, FlashData};
-use crate::FlashEraseType;
 
 extern crate alloc;
 
@@ -125,7 +125,6 @@ pub fn erase(
     use_stub: bool,
     speed: Option<u32>,
     flash_size: Option<FlashSize>,
-    erase_type: FlashEraseType,
     dry_run: bool,
 ) -> anyhow::Result<()> {
     let mut flasher = new(port, chip, use_stub, speed)?;
@@ -135,19 +134,7 @@ pub fn erase(
     }
 
     if !dry_run {
-        if matches!(erase_type, FlashEraseType::Write) {
-            // Necessary because Secure Download mode does not support erase_flash
-
-            let size = flash_size.unwrap_or(FlashSize::_4Mb).size() as _;
-            let mut chunk = Vec::with_capacity(size);
-            chunk.resize(size, 0xff);
-
-            flasher
-                .write_bin_to_flash(0, &chunk, None)
-                .context("Erasing flash failed")?;
-        } else {
-            flasher.erase_flash().context("Erasing flash failed")?;
-        }
+        flasher.erase_flash().context("Erasing flash failed")?;
     } else {
         warn!("Flash dry run mode: erasing flash skipped");
     }
@@ -243,8 +230,7 @@ pub fn erase_esptool(
     chip: Chip,
     use_stub: bool,
     speed: Option<u32>,
-    flash_size: Option<FlashSize>,
-    erase_type: FlashEraseType,
+    _flash_size: Option<FlashSize>,
     dry_run: bool,
 ) -> anyhow::Result<()> {
     let mut command = Command::new(esptools::Tool::EspTool.mount()?.path());
@@ -263,38 +249,10 @@ pub fn erase_esptool(
         command.arg("--baud").arg(speed.to_string());
     }
 
-    let mut data_temp_file = NamedTempFile::new().context("Creating a temporary file failed")?;
+    command.arg("erase_flash");
 
-    if matches!(erase_type, FlashEraseType::Standard) {
-        command.arg("erase_flash");
-
-        // Necessary for chips in Secure Download Mode
-        command.arg("--force");
-    } else {
-        let size = flash_size.unwrap_or(FlashSize::_4Mb).size() as _;
-        let mut chunk = Vec::with_capacity(size);
-        chunk.resize(size, 0xff);
-
-        data_temp_file
-            .write_all(&chunk)
-            .context("Writing the binary image to a temporary file failed")?;
-
-        data_temp_file
-            .flush()
-            .context("Flushing the temporary file failed")?;
-
-        command
-            .arg("write_flash")
-            .arg(format!("0x{:x}", 0))
-            .arg(data_temp_file.path());
-
-        if let Some(flash_size) = flash_size {
-            command.arg("--flash_size").arg(format!("{flash_size}"));
-        }
-
-        // Necessary for chips in Secure Download Mode
-        command.arg("--force");
-    }
+    // Necessary for chips in Secure Download Mode
+    command.arg("--force");
 
     if !dry_run {
         warn!("About to execute `esptool.py` command `{command:?}`...");
@@ -318,6 +276,54 @@ pub fn erase_esptool(
     }
 
     Ok(())
+}
+
+pub fn encrypt(offset: usize, raw_data: &[u8], key: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let key_file = NamedTempFile::new().context("Creating temp key file failed")?;
+    fs::write(key_file.path(), key).context("Creating temp key file failed")?;
+
+    let espsecure = esptools::Tool::EspSecure.mount()?;
+
+    let input_file = NamedTempFile::new().context("Creating temp input file failed")?;
+    fs::write(input_file.path(), raw_data).context("Creating temp input file failed")?;
+
+    let output_file = NamedTempFile::new().context("Creating temp output file failed")?;
+
+    let mut command = Command::new(espsecure.path());
+
+    command
+        .arg("encrypt_flash_data")
+        .arg("--aes_xts")
+        .arg("--keyfile")
+        .arg(key_file.path())
+        .arg("--address")
+        .arg(format!("0x{:x}", offset))
+        .arg("--output")
+        .arg(output_file.path())
+        .arg(input_file.path());
+
+    let output = command.output().with_context(|| {
+        "Executing the espsecure tool with command `encrypt_flash_data` failed".to_string()
+    })?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "espsecure tool `encrypt_flash_data` command failed with status: {}. Stderr output:\n{}",
+            output.status,
+            core::str::from_utf8(&output.stderr).unwrap_or("???")
+        );
+    }
+
+    let data = fs::read(output_file.path()).context("Reading encrypted data failed")?;
+
+    Ok(data)
+}
+
+pub fn empty_space(size: usize) -> Vec<u8> {
+    let mut chunk = Vec::with_capacity(size);
+    chunk.resize(size, 0xff);
+
+    chunk
 }
 
 fn new(

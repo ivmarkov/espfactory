@@ -2,9 +2,7 @@ use core::fmt::{self, Display};
 use core::future::Future;
 
 use std::fmt::Write as _;
-use std::fs;
 use std::io::{Seek, Write};
-use std::process::Command;
 use std::sync::Mutex;
 
 use alloc::sync::Arc;
@@ -22,7 +20,7 @@ use tempfile::NamedTempFile;
 
 use crate::bundle::{Bundle, Chip, Efuse, Params, ProvisioningStatus};
 use crate::efuse;
-use crate::flash;
+use crate::flash::{self, encrypt};
 use crate::input::{TaskConfirmationOutcome, TaskInput, TaskInputOutcome};
 use crate::loader::BundleLoader;
 use crate::model::{FileLogs, Model, Processing, Provision, Readout, State};
@@ -546,7 +544,7 @@ where
         )
         .await?;
 
-        let bundle = if let Some(base_loader) = self.bundle_base_loader.as_mut() {
+        let mut bundle = if let Some(base_loader) = self.bundle_base_loader.as_mut() {
             info!("About to load base bundle");
 
             let mut base_bundle = Self::prep_one_bundle(
@@ -572,14 +570,18 @@ where
 
             base_bundle.add(bundle, self.conf.overwrite_on_merge)?;
 
-            info!("{base_bundle}");
-
             info!("Bundles merged");
 
             base_bundle
         } else {
             bundle
         };
+
+        if self.conf.reset_empty_partitions {
+            info!("Adding 0xff images for empty partitions");
+
+            bundle.add_empty();
+        }
 
         self.model.modify(move |inner| {
             inner.state = State::Provision(Provision {
@@ -603,6 +605,8 @@ where
         });
 
         info!("About to provision bundle `{bundle_name}`");
+
+        let flash_erase_all = self.conf.flash_erase;
 
         let (chip, flash_size, keys, mut flash_data) = self.model.access(|inner| {
             let ps = inner.state.provision();
@@ -646,49 +650,9 @@ where
                         let key = key.clone();
 
                         unblock("encrypt-flash-data", move || {
-                            let key_file = NamedTempFile::new().context("Creating temp key file failed")?;
-                            fs::write(key_file.path(), key).context("Creating temp key file failed")?;
-
-                            let espsecure = esptools::Tool::EspSecure.mount()?;
-
-                            let input_file =
-                                NamedTempFile::new().context("Creating temp input file failed")?;
-                            fs::write(input_file.path(), raw_data.as_slice())
-                                .context("Creating temp input file failed")?;
-
-                            let output_file =
-                                NamedTempFile::new().context("Creating temp output file failed")?;
-
-                            let mut command = Command::new(espsecure.path());
-
-                            command
-                                .arg("encrypt_flash_data")
-                                .arg("--aes_xts")
-                                .arg("--keyfile")
-                                .arg(key_file.path())
-                                .arg("--address")
-                                .arg(format!("0x{:x}", offset))
-                                .arg("--output")
-                                .arg(output_file.path())
-                                .arg(input_file.path());
-
-                            let output = command.output().with_context(|| {
-                                "Executing the espsecure tool with command `encrypt_flash_data` failed"
-                                    .to_string()
-                            })?;
-
-                            if !output.status.success() {
-                                anyhow::bail!(
-                                    "espsecure tool `encrypt_flash_data` command failed with status: {}. Stderr output:\n{}",
-                                    output.status,
-                                    core::str::from_utf8(&output.stderr).unwrap_or("???")
-                                );
-                            }
-
-                            let data = fs::read(output_file.path()).context("Reading encrypted data failed")?;
-
-                            Ok(data)
-                        }).await?
+                            encrypt(offset as _, &raw_data, &key)
+                        })
+                        .await?
                     };
 
                     flash_data.data = Arc::new(encrypted_data);
@@ -696,8 +660,8 @@ where
             }
         }
 
-        if let Some(flash_erase) = self.conf.flash_erase {
-            info!("About to erase flash using the `{flash_erase}` algorithm: Chip={chip:?}, Flash Size={flash_size:?}");
+        if flash_erase_all {
+            info!("About to erase all flash using the standard `Flash Erase` command: Chip={chip:?}, Flash Size={flash_size:?}");
         }
 
         info!(
@@ -706,7 +670,6 @@ where
         );
 
         let flash_use_stub = !self.conf.flash_no_stub;
-        let flash_erase = self.conf.flash_erase;
         let flash_esptool = self.conf.flash_esptool;
         let flash_port = self.conf.port.clone();
         let flash_speed = self.conf.flash_speed;
@@ -717,14 +680,13 @@ where
             let mut progress = FlashProgress::new(flash_model);
 
             if flash_esptool {
-                if let Some(flash_erase) = flash_erase {
+                if flash_erase_all {
                     flash::erase_esptool(
                         flash_port.as_deref(),
                         chip,
                         flash_use_stub,
                         flash_speed,
                         flash_size,
-                        flash_erase,
                         flash_dry_run,
                     )?;
                 }
@@ -740,14 +702,13 @@ where
                     &mut progress,
                 )
             } else {
-                if let Some(flash_erase) = flash_erase {
+                if flash_erase_all {
                     flash::erase(
                         flash_port.as_deref(),
                         chip,
                         flash_use_stub,
                         flash_speed,
                         flash_size,
-                        flash_erase,
                         flash_dry_run,
                     )?;
                 }
