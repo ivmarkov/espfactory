@@ -696,8 +696,8 @@ where
             }
         }
 
-        if self.conf.flash_erase {
-            info!("About to erase flash: Chip={chip:?}, Flash Size={flash_size:?}");
+        if let Some(flash_erase) = self.conf.flash_erase {
+            info!("About to erase flash using the `{flash_erase}` algorithm: Chip={chip:?}, Flash Size={flash_size:?}");
         }
 
         info!(
@@ -717,13 +717,14 @@ where
             let mut progress = FlashProgress::new(flash_model);
 
             if flash_esptool {
-                if flash_erase {
+                if let Some(flash_erase) = flash_erase {
                     flash::erase_esptool(
                         flash_port.as_deref(),
                         chip,
                         flash_use_stub,
                         flash_speed,
                         flash_size,
+                        flash_erase,
                         flash_dry_run,
                     )?;
                 }
@@ -739,13 +740,14 @@ where
                     &mut progress,
                 )
             } else {
-                if flash_erase {
+                if let Some(flash_erase) = flash_erase {
                     flash::erase(
                         flash_port.as_deref(),
                         chip,
                         flash_use_stub,
                         flash_speed,
                         flash_size,
+                        flash_erase,
                         flash_dry_run,
                     )?;
                 }

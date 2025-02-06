@@ -166,7 +166,7 @@ impl BundleLoader for S3Loader {
                                     .context("Loading the bundle failed")?;
                             }
 
-                            let bundle_name = key.split('/').last().unwrap_or(key).to_string();
+                            let bundle_name = key.split('/').next_back().unwrap_or(key).to_string();
 
                             if id.is_none() && self.delete_after_load {
                                 client

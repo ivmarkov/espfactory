@@ -79,7 +79,7 @@ where
 
     let status = command
         .status()
-        .context("Executing the eFuse tool with command `{command:?}` failed")?;
+        .with_context(|| format!("Executing the eFuse tool with command `{command:?}` failed"))?;
 
     if !status.success() {
         anyhow::bail!(

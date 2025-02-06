@@ -18,6 +18,7 @@ use serialport::{FlowControl, SerialPortInfo, SerialPortType, UsbPortInfo};
 use tempfile::NamedTempFile;
 
 use crate::bundle::{Chip, FlashData};
+use crate::FlashEraseType;
 
 extern crate alloc;
 
@@ -124,6 +125,7 @@ pub fn erase(
     use_stub: bool,
     speed: Option<u32>,
     flash_size: Option<FlashSize>,
+    erase_type: FlashEraseType,
     dry_run: bool,
 ) -> anyhow::Result<()> {
     let mut flasher = new(port, chip, use_stub, speed)?;
@@ -133,7 +135,19 @@ pub fn erase(
     }
 
     if !dry_run {
-        flasher.erase_flash().context("Erasing flash failed")?;
+        if matches!(erase_type, FlashEraseType::Write) {
+            // Necessary because Secure Download mode does not support erase_flash
+
+            let size = flash_size.unwrap_or(FlashSize::_4Mb).size() as _;
+            let mut chunk = Vec::with_capacity(size);
+            chunk.resize(size, 0xff);
+
+            flasher
+                .write_bin_to_flash(0, &chunk, None)
+                .context("Erasing flash failed")?;
+        } else {
+            flasher.erase_flash().context("Erasing flash failed")?;
+        }
     } else {
         warn!("Flash dry run mode: erasing flash skipped");
     }
@@ -229,7 +243,8 @@ pub fn erase_esptool(
     chip: Chip,
     use_stub: bool,
     speed: Option<u32>,
-    _flash_size: Option<FlashSize>,
+    flash_size: Option<FlashSize>,
+    erase_type: FlashEraseType,
     dry_run: bool,
 ) -> anyhow::Result<()> {
     let mut command = Command::new(esptools::Tool::EspTool.mount()?.path());
@@ -248,10 +263,38 @@ pub fn erase_esptool(
         command.arg("--baud").arg(speed.to_string());
     }
 
-    command.arg("erase_flash");
+    let mut data_temp_file = NamedTempFile::new().context("Creating a temporary file failed")?;
 
-    // Necessary for chips in Secure Download Mode
-    command.arg("--force");
+    if matches!(erase_type, FlashEraseType::Standard) {
+        command.arg("erase_flash");
+
+        // Necessary for chips in Secure Download Mode
+        command.arg("--force");
+    } else {
+        let size = flash_size.unwrap_or(FlashSize::_4Mb).size() as _;
+        let mut chunk = Vec::with_capacity(size);
+        chunk.resize(size, 0xff);
+
+        data_temp_file
+            .write_all(&chunk)
+            .context("Writing the binary image to a temporary file failed")?;
+
+        data_temp_file
+            .flush()
+            .context("Flushing the temporary file failed")?;
+
+        command
+            .arg("write_flash")
+            .arg(format!("0x{:x}", 0))
+            .arg(data_temp_file.path());
+
+        if let Some(flash_size) = flash_size {
+            command.arg("--flash_size").arg(format!("{flash_size}"));
+        }
+
+        // Necessary for chips in Secure Download Mode
+        command.arg("--force");
+    }
 
     if !dry_run {
         warn!("About to execute `esptool.py` command `{command:?}`...");

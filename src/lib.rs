@@ -1,4 +1,5 @@
 #![allow(async_fn_in_trait)]
+use core::fmt::{self, Display};
 
 use alloc::sync::Arc;
 
@@ -28,6 +29,24 @@ mod model;
 mod task;
 mod ui;
 mod utils;
+
+/// The method used to erase the flash
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum FlashEraseType {
+    /// Standard; only works if Secure Download mode is not enabled
+    Standard,
+    /// By writing 0xff to the flash
+    Write,
+}
+
+impl Display for FlashEraseType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Standard => write!(f, "Standard"),
+            Self::Write => write!(f, "Write 0xff bytes"),
+        }
+    }
+}
 
 /// The configuration of the factory
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -61,7 +80,7 @@ pub struct Config {
     pub flash_no_stub: bool,
     /// Erase flash prior to flashing
     #[serde(default)]
-    pub flash_erase: bool,
+    pub flash_erase: Option<FlashEraseType>,
     /// Use `esptool.py` for flashing the device
     #[serde(default)]
     pub flash_esptool: bool,
@@ -137,7 +156,7 @@ impl Config {
             efuse_protect_digests: false,
             port: None,
             flash_no_stub: false,
-            flash_erase: false,
+            flash_erase: None,
             flash_esptool: false,
             flash_encrypt: false,
             flash_speed: None,
