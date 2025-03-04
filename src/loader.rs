@@ -74,9 +74,9 @@ pub trait BundleLoader {
     /// # Arguments
     /// - `write` - a writer to write the bundle to
     /// - `id` - an optional ID of the bundle to load, where the ID is usually a PCB number, or a device ID number
-    ///          (see `BundleIdentification`)
-    ///          if provided, then the bundle with the given ID is loaded and the bundle is not removed from the source
-    ///          if not provided, then a random bundle is loaded and the bundle is removed from the source
+    ///   (see `BundleIdentification`)
+    ///   if provided, then the bundle with the given ID is loaded and the bundle is not removed from the source
+    ///   if not provided, then a random bundle is loaded and the bundle is removed from the source
     ///
     /// # Returns
     /// The name of the loaded bundle

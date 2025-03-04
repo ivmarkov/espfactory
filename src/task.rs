@@ -77,7 +77,7 @@ where
 
     /// Run the factory bundle provisioning task in a loop as follows:
     /// - Step 1: eFuse readouts (read the necessary IDs from the chip eFuse memory)
-    /// - Step 2: Readouts (read the necessary IDs from the user, e.g. Test JIG ID, PCB ID, Device ID)
+    /// - Step 2: Readouts (read the necessary IDs from the user, e.g. Device ID, PCB ID, Test JIG ID)
     /// - Step 3: Load and prepare the (next) bundle to be provisioned, possibly using one of the readouts as a bundle ID
     ///   by fetching the bundle content using the bundle loader, and then creating a `Bundle` instance
     /// - Step 4: Provision the bundle by flashing and optionally efusing the chip with the bundle content
@@ -317,10 +317,10 @@ where
             readouts.readouts.clear();
             readouts.active = 0;
 
-            if self.conf.test_jig_id_readout {
+            if self.conf.device_id_readout {
                 readouts
                     .readouts
-                    .push(("Test JIG ID".to_string(), "".to_string()));
+                    .push(("Device ID".to_string(), "".to_string()));
             }
 
             if self.conf.pcb_id_readout {
@@ -329,10 +329,10 @@ where
                     .push(("PCB ID".to_string(), "".to_string()));
             }
 
-            if self.conf.device_id_readout {
+            if self.conf.test_jig_id_readout {
                 readouts
                     .readouts
-                    .push(("Device ID".to_string(), "".to_string()));
+                    .push(("Test JIG ID".to_string(), "".to_string()));
             }
         };
 
@@ -404,11 +404,11 @@ where
         &mut self,
         input: impl TaskInput,
     ) -> anyhow::Result<Option<String>, TaskError> {
-        let (_test_jig_id, pcb_id, device_id) = self.model.access(|inner| {
+        let (device_id, pcb_id, _test_jig_id) = self.model.access(|inner| {
             let readouts = inner.state.readout();
             let mut offset = 0;
 
-            let test_jig_id = if self.conf.test_jig_id_readout {
+            let device_id = if self.conf.device_id_readout {
                 let readout = readouts.readouts[offset].1.clone();
 
                 offset += 1;
@@ -428,14 +428,15 @@ where
                 None
             };
 
-            let device_id = if self.conf.device_id_readout {
+            let test_jig_id = if self.conf.test_jig_id_readout {
                 let readout = readouts.readouts[offset].1.clone();
+
                 Some(readout)
             } else {
                 None
             };
 
-            (test_jig_id, pcb_id, device_id)
+            (device_id, pcb_id, test_jig_id)
         });
 
         self.model
@@ -443,8 +444,8 @@ where
 
         let bundle_id = match self.conf.bundle_identification {
             BundleIdentification::None => None,
-            BundleIdentification::PcbId => pcb_id,
             BundleIdentification::DeviceId => device_id,
+            BundleIdentification::PcbId => pcb_id,
         };
 
         Self::process(

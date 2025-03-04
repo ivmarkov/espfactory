@@ -38,8 +38,8 @@ impl HttpLoader {
     /// # Arguments
     /// - `load_url`: The URL of the server to load the bundles from
     /// - `auth`: An optional authorization token to use when loading the bundles
-    ///           If present, it will be used as the value of the `Authorization` header
-    ///           in the request
+    ///   If present, it will be used as the value of the `Authorization` header
+    ///   in the request
     /// - `use_post`: A flag indicating whether to fetch the bundle with a GET or a POST request
     /// - `id_as_bundle_file`: A flag indicating whether to fetch the bundle with:
     ///   - `true`:  A simple parameter-less GET/POST request of the form `<url>/<bundle-id>.bundle`

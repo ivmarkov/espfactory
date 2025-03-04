@@ -212,10 +212,10 @@ pub enum BundleIdentification {
     /// remove it from the storage.
     #[default]
     None,
-    /// Use the PCB ID as the bundle ID
-    PcbId,
     /// Use the Device ID as the bundle ID
     DeviceId,
+    /// Use the PCB ID as the bundle ID
+    PcbId,
 }
 
 /// Run the factory
