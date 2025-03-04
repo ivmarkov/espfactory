@@ -2,6 +2,8 @@
 
 use alloc::sync::Arc;
 
+use anyhow::Context;
+
 use embassy_futures::select::select3;
 
 use input::{LogInput, LogInputOutcome};
@@ -204,18 +206,71 @@ const fn default_usize<const V: usize>() -> usize {
     V
 }
 
+/// Parameters for extracing the bundle ID from the Device ID or the PCB ID
+#[derive(Clone, Default, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct BundleIdentificationParsing {
+    /// An optional regular expression to grep only a fraction of the Device ID
+    pub regex: Option<String>,
+    /// Trim the Device ID before using it as the bundle ID
+    #[serde(default)]
+    pub trim: bool,
+    /// Assume the Device ID is a number and convert it to a numeric value
+    #[serde(default)]
+    pub numeric: bool,
+}
+
+impl BundleIdentificationParsing {
+    /// Parse the source string and extract the bundle ID
+    pub fn parse(&self, source: &str) -> anyhow::Result<String> {
+        let mut id = source.to_string();
+
+        if let Some(regex) = &self.regex {
+            let re = regex::Regex::new(regex).expect("Invalid regex");
+            if let Some(captures) = re.captures(&id) {
+                id = captures
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+            }
+        }
+
+        if self.trim {
+            id = id.trim().to_string();
+        }
+
+        if id.is_empty() {
+            Err(anyhow::anyhow!(
+                "Parsing bundle identification yields an empty string"
+            ))?;
+        }
+
+        if self.numeric {
+            id = id
+                .trim()
+                .parse::<u64>()
+                .map(|n| n.to_string())
+                .with_context(|| {
+                    format!("Parsing bundle identification `{}` as a number failed", id)
+                })?;
+        }
+
+        Ok(id)
+    }
+}
+
 /// The identification method used to identify a bundle to be loaded.
-#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(tag = "field")]
 pub enum BundleIdentification {
     /// No identification method is used - just load the first bundle found
     /// and - depending on the concrete `BundleLoader` implementation and its configuration -
     /// remove it from the storage.
     #[default]
     None,
-    /// Use the Device ID as the bundle ID
-    DeviceId,
-    /// Use the PCB ID as the bundle ID
-    PcbId,
+    /// Extract the bundle ID from the Device ID
+    DeviceId(BundleIdentificationParsing),
+    /// Extract the bundle ID from the PCB ID
+    PcbId(BundleIdentificationParsing),
 }
 
 /// Run the factory

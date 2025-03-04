@@ -442,11 +442,19 @@ where
         self.model
             .modify(|inner| inner.state = State::Processing(Processing::new(" Preparing bundle ")));
 
-        let bundle_id = match self.conf.bundle_identification {
+        let bundle_id_source = match &self.conf.bundle_identification {
             BundleIdentification::None => None,
-            BundleIdentification::DeviceId => device_id,
-            BundleIdentification::PcbId => pcb_id,
+            BundleIdentification::DeviceId(parsing) => {
+                device_id.map(|device_id| (device_id, parsing))
+            }
+            BundleIdentification::PcbId(parsing) => pcb_id.map(|pcb_id| (pcb_id, parsing)),
         };
+
+        let bundle_id = bundle_id_source
+            .as_ref()
+            .map(|(id, parsing)| parsing.parse(id))
+            .transpose()
+            .map_err(TaskError::Other)?;
 
         Self::process(
             &self.model.clone(),
