@@ -179,7 +179,7 @@ impl TaskInput for &Input<'_> {
                     return TaskInputOutcome::Quit;
                 }
                 (modifiers, code) => {
-                    if modifiers.is_empty() {
+                    if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT {
                         match code {
                             KeyCode::Backspace => {
                                 if current.pop().is_some() {
