@@ -1,7 +1,7 @@
-use std::{
-    io::{Read, Seek},
-    path::PathBuf,
-};
+use std::io::{Read, Seek};
+use std::path::PathBuf;
+
+use chrono::{SecondsFormat, Utc};
 
 use url::Url;
 
@@ -15,8 +15,8 @@ pub trait BundleLogsUploader {
     async fn upload_logs<R>(
         &mut self,
         _read: R,
-        _id: Option<&str>,
-        _name: &str,
+        _bundle_id: Option<&str>,
+        _bundle_name: &str,
     ) -> anyhow::Result<()>
     where
         R: Read + Seek,
@@ -30,11 +30,16 @@ impl<T> BundleLogsUploader for &mut T
 where
     T: BundleLogsUploader,
 {
-    async fn upload_logs<R>(&mut self, read: R, id: Option<&str>, name: &str) -> anyhow::Result<()>
+    async fn upload_logs<R>(
+        &mut self,
+        read: R,
+        bundle_id: Option<&str>,
+        bundle_name: &str,
+    ) -> anyhow::Result<()>
     where
         R: Read + Seek,
     {
-        (*self).upload_logs(read, id, name).await
+        (*self).upload_logs(read, bundle_id, bundle_name).await
     }
 }
 
@@ -79,15 +84,20 @@ impl LogsUploader {
 }
 
 impl BundleLogsUploader for LogsUploader {
-    async fn upload_logs<R>(&mut self, read: R, id: Option<&str>, name: &str) -> anyhow::Result<()>
+    async fn upload_logs<R>(
+        &mut self,
+        read: R,
+        bundle_id: Option<&str>,
+        bundle_name: &str,
+    ) -> anyhow::Result<()>
     where
         R: std::io::Read + std::io::Seek,
     {
         match self {
-            Self::Dir(loader) => loader.upload_logs(read, id, name).await,
-            Self::Http(loader) => loader.upload_logs(read, id, name).await,
+            Self::Dir(loader) => loader.upload_logs(read, bundle_id, bundle_name).await,
+            Self::Http(loader) => loader.upload_logs(read, bundle_id, bundle_name).await,
             #[cfg(feature = "s3")]
-            Self::S3(loader) => loader.upload_logs(read, id, name).await,
+            Self::S3(loader) => loader.upload_logs(read, bundle_id, bundle_name).await,
         }
     }
 }
@@ -102,18 +112,30 @@ where
     async fn upload_logs<R>(
         &mut self,
         mut read: R,
-        id: Option<&str>,
-        name: &str,
+        bundle_id: Option<&str>,
+        bundle_name: &str,
     ) -> anyhow::Result<()>
     where
         R: std::io::Read + std::io::Seek,
     {
         for uploader in self.0.iter_mut() {
-            if let Err(err) = uploader.upload_logs(&mut read, id, name).await {
+            if let Err(err) = uploader
+                .upload_logs(&mut read, bundle_id, bundle_name)
+                .await
+            {
                 log::error!("Error when uploading logs: {err}");
             }
         }
 
         Ok(())
     }
+}
+
+fn log_name(_bundle_id: Option<&str>, bundle_name: &str) -> String {
+    let now = Utc::now();
+
+    format!(
+        "{bundle_name}_{}.log.zip",
+        now.to_rfc3339_opts(SecondsFormat::Secs, true)
+    )
 }

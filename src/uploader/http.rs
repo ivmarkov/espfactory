@@ -4,6 +4,8 @@ use anyhow::Context;
 
 use log::info;
 
+use crate::uploader::log_name;
+
 use super::BundleLogsUploader;
 
 /// A logs uploader that uploads logs to an HTTP(S) server.
@@ -46,20 +48,22 @@ impl BundleLogsUploader for HttpLogsUploader {
     async fn upload_logs<R>(
         &mut self,
         mut read: R,
-        id: Option<&str>,
-        name: &str,
+        bundle_id: Option<&str>,
+        bundle_name: &str,
     ) -> anyhow::Result<()>
     where
         R: Read + Seek,
     {
-        if let Some(id) = id {
+        let log_name = log_name(bundle_id, bundle_name);
+
+        if let Some(bundle_id) = bundle_id {
             info!(
-                "About to upload logs `{name}.log.zip` for ID `{id}` to URL `{}`...",
+                "About to upload logs `{log_name}` for Bundle ID `{bundle_id}` to URL `{}`...",
                 self.logs_upload_url
             );
         } else {
             info!(
-                "About to uploads logs `{name}` to URL `{}`...",
+                "About to uploads logs `{log_name}` to URL `{}`...",
                 self.logs_upload_url
             );
         }
@@ -68,13 +72,10 @@ impl BundleLogsUploader for HttpLogsUploader {
 
         let mut builder = if self.name_as_log_file {
             // When `name_as_log_file` is `true`, we dictate the name of the uploaded log file
-            let url = format!(
-                "{}/{name}.log.zip",
-                self.logs_upload_url.trim_end_matches('/')
-            );
+            let url = format!("{}/{log_name}", self.logs_upload_url.trim_end_matches('/'));
 
             client.post(&url)
-        } else if let Some(id) = id {
+        } else if let Some(id) = bundle_id {
             client.post(&self.logs_upload_url).query(&[("id", id)])
         } else {
             client.post(&self.logs_upload_url)
@@ -82,7 +83,7 @@ impl BundleLogsUploader for HttpLogsUploader {
 
         builder = builder.header(
             "Content-Disposition",
-            format!("attachment; filename=\"{name}.log.zip\""),
+            format!("attachment; filename=\"{log_name}\""),
         );
 
         if let Some(auth) = self.auth.as_deref() {
@@ -104,7 +105,7 @@ impl BundleLogsUploader for HttpLogsUploader {
             .error_for_status()
             .context("Request returned an error status")?;
 
-        info!("Logs `{name}.log.zip` uploaded");
+        info!("Logs `{log_name}` uploaded");
 
         Ok(())
     }

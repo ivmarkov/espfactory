@@ -9,6 +9,8 @@ use log::info;
 
 use tempfile::tempfile;
 
+use crate::uploader::log_name;
+
 use super::BundleLogsUploader;
 
 /// Re-export the `aws-config` crate as a module so that the user
@@ -49,20 +51,22 @@ impl BundleLogsUploader for S3LogsUploader {
     async fn upload_logs<R>(
         &mut self,
         mut read: R,
-        id: Option<&str>,
-        name: &str,
+        bundle_id: Option<&str>,
+        bundle_name: &str,
     ) -> anyhow::Result<()>
     where
         R: Read + Seek,
     {
-        if let Some(id) = id {
+        let log_name = log_name(bundle_id, bundle_name);
+
+        if let Some(bundle_id) = bundle_id {
             info!(
-                "About to upload logs `{name}.log.zip` for ID `{id}` to S3 bucket `{}`...",
+                "About to upload logs `{log_name}` for Bundle ID `{bundle_id}` to S3 bucket `{}`...",
                 BucketWithPrefix::new(&self.logs_upload_bucket, self.logs_upload_prefix.as_deref())
             );
         } else {
             info!(
-                "About to uploads logs `{name}.log.zip` to S3 bucket `{}`...",
+                "About to uploads logs `{log_name}` to S3 bucket `{}`...",
                 BucketWithPrefix::new(&self.logs_upload_bucket, self.logs_upload_prefix.as_deref())
             );
         }
@@ -78,8 +82,8 @@ impl BundleLogsUploader for S3LogsUploader {
         let key = self
             .logs_upload_prefix
             .as_deref()
-            .map(|prefix| format!("{prefix}/{name}.log.zip"))
-            .unwrap_or(format!("{name}.log.zip"));
+            .map(|prefix| format!("{prefix}/{log_name}"))
+            .unwrap_or(log_name.clone());
 
         read.seek(io::SeekFrom::Start(0))
             .context("Saving the bundle log failed")?;
@@ -109,7 +113,7 @@ impl BundleLogsUploader for S3LogsUploader {
             .await
             .context("Uploading the bundle log failed")?;
 
-        info!("Logs `{name}.log.zip` uploaded");
+        info!("Logs `{log_name}` uploaded");
 
         Ok(())
     }
