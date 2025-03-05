@@ -1300,7 +1300,10 @@ impl ProgressCallbacks for FlashProgress {
             ((), notify)
         });
 
-        info!("Initiated flash for addr `0x{addr:08x}`, size {total}KB");
+        info!(
+            "Initiated flash for addr `0x{addr:08x}`, size {}KB",
+            total / 1024
+        );
     }
 
     fn update(&mut self, current: usize) {
