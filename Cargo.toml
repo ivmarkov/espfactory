@@ -57,3 +57,4 @@ async-compat = { version = "0.2", optional = true } # Because the AWS SDK uses t
 clap = { version = "4", optional = true, features = ["derive"] }
 url = { version = "2.5", features = ["serde"] }
 regex = "1"
+strip-ansi-escapes = "0.2"

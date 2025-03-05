@@ -1,8 +1,10 @@
 use core::fmt::{self, Display};
 use core::future::Future;
+use core::pin::pin;
 
 use std::fmt::Write as _;
 use std::io::{Seek, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use alloc::sync::Arc;
@@ -12,6 +14,7 @@ use anyhow::Context;
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_time::{Duration, Ticker};
 
+use espflash::cli::monitor::LogFormat;
 use espflash::flasher::ProgressCallbacks;
 
 use log::{error, info, warn};
@@ -19,13 +22,14 @@ use log::{error, info, warn};
 use tempfile::NamedTempFile;
 
 use crate::bundle::{Bundle, Chip, Efuse, Params, ProvisioningStatus};
-use crate::efuse;
-use crate::flash::{self, encrypt};
+use crate::flash::{self, encrypt, DEFAULT_BAUD_RATE};
 use crate::input::{TaskConfirmationOutcome, TaskInput, TaskInputOutcome};
 use crate::loader::BundleLoader;
-use crate::model::{FileLogs, Model, Processing, Provision, Readout, State};
+use crate::model::{AppLogs, FileLogs, Model, Processing, Provision, Readout, State};
 use crate::uploader::BundleLogsUploader;
 use crate::utils::futures::unblock;
+use crate::utils::linewrite::LineWrite;
+use crate::{efuse, monitor, AppRun};
 use crate::{BundleIdentification, Config};
 
 extern crate alloc;
@@ -807,27 +811,101 @@ where
     }
 
     async fn run_app(&mut self, bundle_name: String, chip: Chip) -> anyhow::Result<()> {
-        if !self.conf.leave_download_mode {
-            const WAIT_SECS: u64 = 10;
-
+        if !matches!(self.conf.app_run, AppRun::Disabled) {
             info!("Running app to finish provisioning");
 
             self.model.modify(|inner| {
-                inner.state = State::new();
-
-                inner.state.processing_mut().status = "Running app".to_string();
+                inner.state = State::AppRun(AppLogs::new(100));
             });
 
             let run_use_stub = !self.conf.flash_no_stub;
             let run_port = self.conf.port.clone();
             let run_speed = self.conf.flash_speed;
+            let run_model = Arc::new(Mutex::new(Some(self.model.clone())));
+            let run_model_inner = run_model.clone();
+            let run_stop = Arc::new(AtomicBool::new(false));
+            let run_stop_inner = run_stop.clone();
+            let (run_end_regex, run_timeout_secs) = match &self.conf.app_run {
+                AppRun::MatchPattern {
+                    pattern,
+                    timeout_secs,
+                } => (
+                    Some(regex::Regex::new(pattern).context("Invalid regex pattern")?),
+                    *timeout_secs,
+                ),
+                AppRun::ForSecs { secs } => (None, *secs),
+                _ => unreachable!(),
+            };
+            let run_end_regex_present = run_end_regex.is_some();
 
-            unblock("run-app", move || {
-                flash::run_app_esptool(run_port.as_deref(), chip, run_use_stub, run_speed)
-            })
-            .await?;
+            let mut log_task = pin!(unblock("run-app", move || {
+                flash::run_app_esptool(run_port.as_deref(), chip, run_use_stub, run_speed)?;
 
-            embassy_time::Timer::after(Duration::from_secs(WAIT_SECS)).await;
+                info!("APP LOG START >>>>>>>>>>>>>>>>>>>>>>>>>>");
+
+                monitor::monitor(
+                    run_port.as_deref(),
+                    None,
+                    DEFAULT_BAUD_RATE,
+                    LogFormat::Serial,
+                    false,
+                    run_stop_inner.clone(),
+                    LineWrite::new(move |line| {
+                        let model = run_model_inner.lock().unwrap();
+
+                        if let Some(model) = model.as_ref() {
+                            // Strip the ANSI escape sequences
+                            // TODO: Do something more intelligent in the future
+                            //let line = line.chars().filter(|c| *c >= ' ').collect::<String>();
+                            let line = strip_ansi_escapes::strip_str(line);
+
+                            info!("[APP LOG] {line}");
+
+                            model.modify(|inner| {
+                                inner.state.app_logs_mut().append(line.clone());
+                            });
+
+                            if let Some(regex) = run_end_regex.as_ref() {
+                                if regex.is_match(&line) {
+                                    run_stop_inner.store(true, Ordering::SeqCst);
+                                    info!("[App run finishing, detected pattern on this line ^^^]");
+                                }
+                            }
+                        }
+                    }),
+                )?;
+
+                info!("APP LOG END <<<<<<<<<<<<<<<<<<<<<<<<<<<<");
+
+                Ok(())
+            }));
+
+            let mut timeout_task = pin!(embassy_time::Timer::after(Duration::from_secs(
+                run_timeout_secs as _
+            )));
+
+            let result = select(&mut log_task, &mut timeout_task).await;
+
+            run_stop.store(true, Ordering::SeqCst);
+            *run_model.lock().unwrap() = None;
+
+            match result {
+                Either::First(result) => {
+                    result?;
+
+                    info!("App run auccessful, match pattern detected");
+                }
+                Either::Second(_) => {
+                    if run_end_regex_present {
+                        error!("App run timeout after {run_timeout_secs} seconds");
+                        anyhow::bail!("App run timeout after {run_timeout_secs} seconds");
+                    } else {
+                        info!("App run auccessful, timeout reached");
+                    }
+                }
+            }
+        } else {
+            info!("App run disabled");
         }
 
         self.model.modify(|inner| {

@@ -22,6 +22,8 @@ use crate::bundle::{Chip, FlashData};
 
 extern crate alloc;
 
+pub(crate) const DEFAULT_BAUD_RATE: u32 = 112500;
+
 /// Return the default bootloader image for the given chip
 ///
 /// Arguments:
@@ -379,7 +381,7 @@ fn new(
 ) -> anyhow::Result<Flasher> {
     let port_info = get_serial_port_info(port)?;
 
-    let serial_port = serialport::new(port_info.port_name, 112500)
+    let serial_port = serialport::new(port_info.port_name, DEFAULT_BAUD_RATE)
         .flow_control(FlowControl::None)
         .open_native()
         .context("Opening serial port failed")?;
@@ -445,7 +447,7 @@ fn bootloader_format<'a>(
 
 /// Return the information of a serial port taking into account the different
 /// ways of choosing a port.
-fn get_serial_port_info(serial: Option<&str>) -> anyhow::Result<SerialPortInfo> {
+pub(crate) fn get_serial_port_info(serial: Option<&str>) -> anyhow::Result<SerialPortInfo> {
     let ports = detect_usb_serial_ports(false).unwrap_or_default();
     find_serial_port(&ports, serial)
 }

@@ -150,6 +150,8 @@ pub enum State {
     Readout(Readout),
     /// The model has prepared the bundle and is either waiting for user confirmation or provisioning it already
     Provision(Provision),
+    /// The model is running the application and displaying the logs
+    AppRun(AppLogs),
     /// The model is processing a task
     Processing(Processing),
     /// The model needs to present the outcome of a task (success or failure)
@@ -205,6 +207,16 @@ impl State {
     pub fn provision_mut(&mut self) -> &mut Provision {
         if let Self::Provision(provision) = self {
             provision
+        } else {
+            panic!("Unexpected state: {self:?}")
+        }
+    }
+
+    /// Get a mutable reference to the app run state
+    /// Panics if the state is not `AppRun`
+    pub fn app_logs_mut(&mut self) -> &mut AppLogs {
+        if let Self::AppRun(app_logs) = self {
+            app_logs
         } else {
             panic!("Unexpected state: {self:?}")
         }
@@ -310,6 +322,32 @@ impl Processing {
             status: String::new(),
             counter: Wrapping(0),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct AppLogs {
+    /// The buffer of the on-screen monitor. Keeps the last N lines logged by the device
+    /// Uses `ratatui::Line` directly in the model for performance reasons
+    pub buffer: VecDeque<Line<'static>>,
+    /// The maximum number of log lines to keep in the buffer
+    buffer_len: usize,
+}
+
+impl AppLogs {
+    pub fn new(buffer_len: usize) -> Self {
+        Self {
+            buffer: VecDeque::new(),
+            buffer_len,
+        }
+    }
+
+    pub fn append(&mut self, line: String) {
+        if self.buffer.len() >= self.buffer_len {
+            self.buffer.pop_front();
+        }
+
+        self.buffer.push_back(Line::raw(line));
     }
 }
 

@@ -27,6 +27,7 @@ mod flash;
 mod input;
 mod logger;
 mod model;
+mod monitor;
 mod task;
 mod ui;
 mod utils;
@@ -88,9 +89,9 @@ pub struct Config {
     /// (eFuse reading will fail if the device has a Secure Download enabled)
     #[serde(default)]
     pub efuse_ignore_failed_readouts: bool,
-    /// Leave the device in download mode after flashing and eFusing
+    /// The type of device app run to perform
     #[serde(default)]
-    pub leave_download_mode: bool,
+    pub app_run: AppRun,
     /// The method used to identify the bundle to be loaded
     #[serde(default)]
     pub bundle_identification: BundleIdentification,
@@ -160,7 +161,7 @@ impl Config {
             flash_encrypt: false,
             flash_speed: None,
             efuse_speed: None,
-            leave_download_mode: false,
+            app_run: AppRun::Disabled,
             bundle_identification: BundleIdentification::None,
             test_jig_id: String::new(),
             test_jig_id_readout: false,
@@ -282,6 +283,20 @@ pub enum BundleIdentification {
     DeviceId(BundleIdentificationParsing),
     /// Extract the bundle ID from the PCB ID
     PcbId(BundleIdentificationParsing),
+}
+
+/// The type of device app run to perform
+#[derive(Clone, Default, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AppRun {
+    /// Do not run the app
+    #[default]
+    Disabled,
+    /// Run the app for a given number of seconds
+    ForSecs { secs: u32 },
+    /// Run the app until a given pattern is matched in the app logs
+    /// or until a timeout is reached which would signify an unsuccessful app run
+    MatchPattern { pattern: String, timeout_secs: u32 },
 }
 
 /// Run the factory

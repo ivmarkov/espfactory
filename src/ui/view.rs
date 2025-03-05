@@ -11,8 +11,8 @@ use ratatui::DefaultTerminal;
 
 use crate::bundle::{Bundle, Efuse, ImageType, ProvisioningStatus};
 use crate::model::{
-    BufferedLogs, BufferedLogsLayout, Logs, Model, ModelInner, Processing, Provision, Readout,
-    State, Status,
+    AppLogs, BufferedLogs, BufferedLogsLayout, Logs, Model, ModelInner, Processing, Provision,
+    Readout, State, Status,
 };
 
 /// The view (UI) of the application
@@ -64,6 +64,7 @@ impl Widget for &State {
             State::Readout(readouts) => readouts.render(area, buf),
             State::Provision(loaded) => loaded.render(area, buf),
             State::Processing(processing) => processing.render(area, buf),
+            State::AppRun(logs) => logs.render(area, buf),
             State::Status(status) => status.render(area, buf),
         }
     }
@@ -444,6 +445,30 @@ impl Widget for &Processing {
         Paragraph::new(counter_text)
             .left_aligned()
             .render(area.inner(Margin::new(2, 2)), buf);
+    }
+}
+
+impl Widget for &AppLogs {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        render_main(
+            Some(" Run App ".to_owned().bold()),
+            Keys::empty(),
+            area,
+            buf,
+        );
+
+        let area = area.inner(Margin::new(2, 2));
+
+        let mut para = Paragraph::new(Text::from_iter(self.buffer.iter().cloned()));
+
+        if true {
+            para = para.wrap(Wrap { trim: false });
+        }
+
+        let lines_ct = para.line_count(area.width);
+        let para = para.scroll(((lines_ct as i32 - area.height as i32).max(0) as u16, 0));
+
+        para.render(area, buf);
     }
 }
 
