@@ -84,6 +84,10 @@ pub struct Config {
     /// If not provided, the default speed will be used
     #[serde(default)]
     pub efuse_speed: Option<u32>,
+    /// Whether to ignore failed readouts of the eFuses
+    /// (eFuse reading will fail if the device has a Secure Download enabled)
+    #[serde(default)]
+    pub efuse_ignore_failed_readouts: bool,
     /// The method used to identify the bundle to be loaded
     #[serde(default)]
     pub bundle_identification: BundleIdentification,
@@ -142,6 +146,7 @@ impl Config {
         Self {
             flash_dry_run: false,
             efuse_dry_run: true,
+            efuse_ignore_failed_readouts: false,
             efuse_protect_keys: false,
             efuse_protect_digests: false,
             port: None,
@@ -189,6 +194,8 @@ impl Config {
         self.flash_esptool = true;
         // Flash erase does not work in Secure Download mode, use reset empty partitions instead
         self.reset_empty_partitions = true;
+        // Can't really read from eFuse when Secure Download mode is enabled
+        self.efuse_ignore_failed_readouts = true;
     }
 }
 

@@ -82,42 +82,15 @@ impl Widget for &Readout {
             Direction::Vertical,
             [
                 Constraint::Min(1),
-                Constraint::Min((self.efuse_readouts.len() + 1) as _),
-                Constraint::Min(1),
-                Constraint::Min(1),
                 Constraint::Min((self.readouts.len() + 1) as _),
                 Constraint::Percentage(100),
             ],
         )
         .split(area.inner(Margin::new(2, 2)));
 
-        Paragraph::new("== eFuse Readouts")
-            .bold()
-            .render(layout[0], buf);
-
-        Table::new(
-            self.efuse_readouts
-                .iter()
-                .map(|(name, value)| {
-                    Row::new::<Vec<Cell>>(vec![
-                        "".into(),
-                        name.as_str().into(),
-                        value.as_str().into(),
-                    ])
-                })
-                .collect::<Vec<_>>(),
-            vec![
-                Constraint::Length(1),
-                Constraint::Percentage(20),
-                Constraint::Percentage(80),
-            ],
-        )
-        .header(Row::new::<Vec<Cell>>(vec!["".into(), "Name".into(), "Value".into()]).gray())
-        .render(layout[1], buf);
-
         Paragraph::new("== Input Readouts")
             .bold()
-            .render(layout[3], buf);
+            .render(layout[1], buf);
 
         Table::new(
             self.readouts
@@ -148,7 +121,7 @@ impl Widget for &Readout {
             ],
         )
         .header(Row::new::<Vec<Cell>>(vec!["".into(), "Name".into(), "Value".into()]).gray())
-        .render(layout[4], buf);
+        .render(layout[2], buf);
     }
 }
 
@@ -220,6 +193,9 @@ impl Widget for &Provision {
                 Constraint::Min(1),
                 Constraint::Min(1),
                 Constraint::Min((self.bundle.efuse_mapping.len() + 1) as _),
+                Constraint::Min(1),
+                Constraint::Min(1),
+                Constraint::Min((self.readouts.len() + 1) as _),
                 Constraint::Percentage(100),
             ],
         )
@@ -415,6 +391,30 @@ impl Widget for &Provision {
                 .gray(),
             )
             .render(layout[4], buf);
+
+            Paragraph::new("== Readouts (manual and eFuse)")
+                .bold()
+                .render(layout[6], buf);
+
+            Table::new(
+                self.readouts
+                    .iter()
+                    .map(|(name, value)| {
+                        Row::new::<Vec<Cell>>(vec![
+                            "".into(),
+                            name.as_str().into(),
+                            value.as_str().into(),
+                        ])
+                    })
+                    .collect::<Vec<_>>(),
+                vec![
+                    Constraint::Length(1),
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(80),
+                ],
+            )
+            .header(Row::new::<Vec<Cell>>(vec!["".into(), "Name".into(), "Value".into()]).gray())
+            .render(layout[7], buf);
         }
     }
 }

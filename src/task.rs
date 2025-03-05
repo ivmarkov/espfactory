@@ -98,7 +98,10 @@ where
             }
             Err(TaskError::Other(err)) => Err(err)?,
             Ok(_) | Err(TaskError::Canceled) | Err(TaskError::Retry) | Err(TaskError::Skipped) => {
-                unreachable!("Task canceled/retried/skipped by user request");
+                unreachable!(
+                    "Task canceled/retried/skipped by user request: {:?}",
+                    result
+                );
             }
         }
     }
@@ -125,42 +128,28 @@ where
             };
 
             let (bundle_id, bundle_name, summary) = 'steps: loop {
-                let mut summary = Vec::new();
+                let mut readouts = Vec::new();
 
                 let bundle_id = loop {
-                    summary.clear();
+                    readouts.clear();
 
-                    info!("=== => STEP 1: eFuse readouts");
-
-                    let result = Self::handle(
-                        &self.model.clone(),
-                        self.step1_prepare_efuse_readout(input.clone()),
-                        "Preparing eFuse readouts failed",
-                        true,
-                        &mut input,
-                    )
-                    .await;
-
-                    match result {
-                        Ok(_) => (),
-                        Err(TaskError::Skipped) => {
-                            // Prepare empty readouts
-                            self.model.modify(move |inner| {
-                                let efuse_values =
-                                    vec![("EFUSE_READOUT_FAILED".to_string(), "Y".to_string())];
-
-                                inner.state = State::Readout(Readout::new_with_efuse(efuse_values))
-                            });
-
-                            warn!("eFuse readouts skipped");
+                    let mut add_readouts = |new_readouts: &[(String, String)], fill_test_jig| {
+                        for (name, value) in new_readouts {
+                            readouts.push((name.clone(), value.clone()));
                         }
-                        Err(TaskError::Canceled) | Err(TaskError::Retry) => continue,
-                        Err(other) => Err(other)?,
-                    }
 
-                    info!("=== => STEP 2: manual readouts");
+                        if fill_test_jig
+                            && !self.conf.test_jig_id_readout
+                            && !self.conf.test_jig_id.is_empty()
+                        {
+                            readouts
+                                .push(("Test JIG ID".to_string(), self.conf.test_jig_id.clone()));
+                        }
+                    };
 
-                    let result = self.step2_readout(&mut input).await;
+                    info!("=== => STEP 1: manual readouts");
+
+                    let result = self.step1_readout(&mut input).await;
 
                     match result {
                         Ok(_) => (),
@@ -170,33 +159,48 @@ where
                     }
 
                     self.model.access(|inner| {
-                        let readout = inner.state.readout();
-
-                        for (name, value) in &readout.efuse_readouts {
-                            summary.push((name.clone(), value.clone()));
-                        }
-
-                        for (name, value) in &readout.readouts {
-                            summary.push((name.clone(), value.clone()));
-                        }
-
-                        if !self.conf.test_jig_id_readout && !self.conf.test_jig_id.is_empty() {
-                            summary
-                                .push(("Test JIG ID".to_string(), self.conf.test_jig_id.clone()));
-                        }
+                        add_readouts(&inner.state.readout().readouts, true);
                     });
+
+                    info!("=== => STEP 2: eFuse readouts");
+
+                    let err_policy = if self.conf.efuse_ignore_failed_readouts {
+                        ErrPolicy::Ignore
+                    } else {
+                        ErrPolicy::ExplicitIgnore
+                    };
+
+                    let efuse_values = loop {
+                        let result = Self::handle(
+                            &self.model.clone(),
+                            self.step2_prepare_efuse_readout(input.clone()),
+                            "Preparing eFuse readouts failed",
+                            err_policy,
+                            &mut input,
+                        )
+                        .await;
+
+                        break match result {
+                            Ok(new_readouts) => new_readouts,
+                            Err(TaskError::Skipped) => {
+                                vec![("EFUSE_READOUT_FAILED".to_string(), "Y".to_string())]
+                            }
+                            Err(TaskError::Retry) => continue,
+                            Err(TaskError::Canceled) => continue 'steps,
+                            Err(other) => Err(other)?,
+                        };
+                    };
+
+                    add_readouts(&efuse_values, false);
 
                     break loop {
                         info!("=== => STEP 3: Bundle preparation");
 
-                        // TODO: Not very efficient
-                        let readout = self.model.access(|inner| inner.state.readout().clone());
-
                         let result = Self::handle(
                             &self.model.clone(),
-                            self.step3_prepare(input.clone()),
+                            self.step3_prepare(input.clone(), &readouts),
                             "Preparing a bundle failed",
-                            false,
+                            ErrPolicy::Propagate,
                             &mut input,
                         )
                         .await;
@@ -204,16 +208,17 @@ where
                         match result {
                             Ok(bundle_id) => break bundle_id,
                             Err(TaskError::Canceled) => continue 'steps,
-                            Err(TaskError::Retry) => {
-                                self.model
-                                    .modify(|inner| inner.state = State::Readout(readout));
-
-                                continue;
-                            }
+                            Err(TaskError::Retry) => continue,
                             Err(other) => Err(other)?,
                         };
                     };
                 };
+
+                self.model.access_mut(|inner| {
+                    inner.state.provision_mut().readouts = readouts.clone();
+
+                    ((), true)
+                });
 
                 break loop {
                     info!("=== => STEP 4: PCB provisioning");
@@ -238,13 +243,13 @@ where
                         &self.model.clone(),
                         self.step4_provision(input.clone()),
                         &format!("Provisioning bundle `{}` failed", provision.bundle.name),
-                        false,
+                        ErrPolicy::Propagate,
                         &mut input,
                     )
                     .await;
 
                     match result {
-                        Ok(_) => break (bundle_id, provision.bundle.name.clone(), summary),
+                        Ok(_) => break (bundle_id, provision.bundle.name.clone(), readouts),
                         Err(TaskError::Canceled) => continue 'steps,
                         Err(TaskError::Retry) => {
                             self.model
@@ -285,23 +290,9 @@ where
     }
 
     /// Step 1:
-    /// Prepare the eFuse readouts by reading those from the chip eFuse memory
-    ///
-    /// Displays a progress info while reading the eFuse values
-    async fn step1_prepare_efuse_readout(
-        &mut self,
-        input: impl TaskInput,
-    ) -> anyhow::Result<(), TaskError> {
-        self.model
-            .modify(|inner| inner.state = State::Processing(Processing::new(" Read eFuse IDs ")));
-
-        Self::process(&self.model.clone(), self.prep_efuse_readouts(), input).await
-    }
-
-    /// Step 2:
     /// Process the readouts state by visualizing the eFuse readouts (if any) and
     /// reading the necessary IDs from the user (if any)
-    async fn step2_readout(&mut self, mut input: impl TaskInput) -> Result<(), TaskError> {
+    async fn step1_readout(&mut self, mut input: impl TaskInput) -> Result<(), TaskError> {
         if !self.conf.test_jig_id.is_empty() {
             if self.conf.test_jig_id_readout {
                 warn!(
@@ -337,6 +328,7 @@ where
         };
 
         self.model.modify(|inner| {
+            inner.state = State::Readout(Readout::new());
             let readouts = inner.state.readout_mut();
             init(readouts);
         });
@@ -398,18 +390,32 @@ where
         result
     }
 
+    /// Step 2:
+    /// Prepare the eFuse readouts by reading those from the chip eFuse memory
+    ///
+    /// Displays a progress info while reading the eFuse values
+    async fn step2_prepare_efuse_readout(
+        &mut self,
+        input: impl TaskInput,
+    ) -> anyhow::Result<Vec<(String, String)>, TaskError> {
+        self.model
+            .modify(|inner| inner.state = State::Processing(Processing::new(" Read eFuse IDs ")));
+
+        Self::process(&self.model.clone(), self.prep_efuse_readouts(), input).await
+    }
+
     /// Step 3:
     /// Prepare the bundle to be provisioned by loading it from the storage
     async fn step3_prepare(
         &mut self,
         input: impl TaskInput,
+        readouts: &[(String, String)],
     ) -> anyhow::Result<Option<String>, TaskError> {
-        let (device_id, pcb_id, _test_jig_id) = self.model.access(|inner| {
-            let readouts = inner.state.readout();
+        let (device_id, pcb_id, _test_jig_id) = {
             let mut offset = 0;
 
             let device_id = if self.conf.device_id_readout {
-                let readout = readouts.readouts[offset].1.clone();
+                let readout = readouts[offset].1.clone();
 
                 offset += 1;
 
@@ -419,7 +425,7 @@ where
             };
 
             let pcb_id = if self.conf.pcb_id_readout {
-                let readout = readouts.readouts[offset].1.clone();
+                let readout = readouts[offset].1.clone();
 
                 offset += 1;
 
@@ -429,7 +435,7 @@ where
             };
 
             let test_jig_id = if self.conf.test_jig_id_readout {
-                let readout = readouts.readouts[offset].1.clone();
+                let readout = readouts[offset].1.clone();
 
                 Some(readout)
             } else {
@@ -437,7 +443,7 @@ where
             };
 
             (device_id, pcb_id, test_jig_id)
-        });
+        };
 
         self.model
             .modify(|inner| inner.state = State::Processing(Processing::new(" Preparing bundle ")));
@@ -482,7 +488,7 @@ where
     //
 
     /// Prepare the eFuse readouts by reading those from the chip eFuse memory
-    async fn prep_efuse_readouts(&mut self) -> anyhow::Result<()> {
+    async fn prep_efuse_readouts(&mut self) -> anyhow::Result<Vec<(String, String)>> {
         static EFUSE_VALUES: &[&str] = &[
             "MAC",
             "WAFER_VERSION_MAJOR",
@@ -534,11 +540,7 @@ where
             info!("Chip {key}: {value}");
         }
 
-        self.model.modify(move |inner| {
-            inner.state = State::Readout(Readout::new_with_efuse(efuse_values))
-        });
-
-        Ok(())
+        Ok(efuse_values)
     }
 
     /// Prepare the bundle to be provisioned by creating a `Bundle` instance from the loaded bundle content
@@ -594,6 +596,7 @@ where
 
         self.model.modify(move |inner| {
             inner.state = State::Provision(Provision {
+                readouts: Vec::new(),
                 bundle,
                 provisioning: false,
             })
@@ -1030,7 +1033,7 @@ where
         model: &Model,
         fut: F,
         err_msg: &str,
-        ignore_allowed: bool,
+        err_policy: ErrPolicy,
         mut input: impl TaskInput,
     ) -> anyhow::Result<R, TaskError>
     where
@@ -1047,23 +1050,31 @@ where
                     .error(format!(" {err_msg} "), format!("{err_msg}: {err:?}"))
             });
 
-            if ignore_allowed {
-                match input
-                    .confirm_or_skip("Retry? <[Y]es/ENTER, [N]o/[C]ancel, [I]gnore, [Q]uit")
-                    .await
-                    .into()
-                {
-                    Ok(_) => Err(TaskError::Retry),
-                    Err(err) => Err(err),
+            match err_policy {
+                ErrPolicy::Ignore => {
+                    info!("Ignoring the error");
+
+                    Err(TaskError::Skipped)
                 }
-            } else {
-                match input
-                    .confirm("Retry? <[Y]es/ENTER, [N]o/[C]ancel, [Q]uit")
-                    .await
-                    .into()
-                {
-                    Ok(_) => Err(TaskError::Retry),
-                    Err(err) => Err(err),
+                ErrPolicy::ExplicitIgnore => {
+                    match input
+                        .confirm_or_skip("Retry? <[Y]es/ENTER, [N]o/[C]ancel, [I]gnore, [Q]uit")
+                        .await
+                        .into()
+                    {
+                        Ok(_) => Err(TaskError::Retry),
+                        Err(err) => Err(err),
+                    }
+                }
+                _ => {
+                    match input
+                        .confirm("Retry? <[Y]es/ENTER, [N]o/[C]ancel, [Q]uit")
+                        .await
+                        .into()
+                    {
+                        Ok(_) => Err(TaskError::Retry),
+                        Err(err) => Err(err),
+                    }
                 }
             }
         } else {
@@ -1228,3 +1239,10 @@ impl Display for TaskError {
 }
 
 impl std::error::Error for TaskError {}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+enum ErrPolicy {
+    Propagate,
+    ExplicitIgnore,
+    Ignore,
+}

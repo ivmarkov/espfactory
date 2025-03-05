@@ -240,9 +240,6 @@ impl Default for State {
 /// The readouts state of the model
 #[derive(Debug, Clone)]
 pub struct Readout {
-    /// The eFuse readouts to display
-    /// Each readout is a tuple of the eFuse key and its stringified value
-    pub efuse_readouts: Vec<(String, String)>,
     /// The readouts to display and input
     /// Each readout is a tuple of the readout name and the readout value
     pub readouts: Vec<(String, String)>,
@@ -255,13 +252,7 @@ pub struct Readout {
 impl Readout {
     /// Create a new `Readouts` state with no readouts
     pub const fn new() -> Self {
-        Self::new_with_efuse(Vec::new())
-    }
-
-    /// Create a new `Readouts` state with no readouts and the given eFuse readouts
-    pub const fn new_with_efuse(efuse_readouts: Vec<(String, String)>) -> Self {
         Self {
-            efuse_readouts,
             readouts: Vec::new(),
             active: 0,
         }
@@ -283,6 +274,9 @@ impl Default for Readout {
 /// (i.e. flashed and efused)
 #[derive(Debug, Clone)]
 pub struct Provision {
+    /// The readouts (manual and eFuse IDs) to display
+    /// Each readout is a tuple of the readout key and its stringified value
+    pub readouts: Vec<(String, String)>,
     /// The prepared bundle
     pub bundle: Bundle,
     /// Whether the bundle is being provisioned (flashed and efused)
