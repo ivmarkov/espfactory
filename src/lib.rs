@@ -88,6 +88,9 @@ pub struct Config {
     /// (eFuse reading will fail if the device has a Secure Download enabled)
     #[serde(default)]
     pub efuse_ignore_failed_readouts: bool,
+    /// Leave the device in download mode after flashing and eFusing
+    #[serde(default)]
+    pub leave_download_mode: bool,
     /// The method used to identify the bundle to be loaded
     #[serde(default)]
     pub bundle_identification: BundleIdentification,
@@ -157,6 +160,7 @@ impl Config {
             flash_encrypt: false,
             flash_speed: None,
             efuse_speed: None,
+            leave_download_mode: false,
             bundle_identification: BundleIdentification::None,
             test_jig_id: String::new(),
             test_jig_id_readout: false,

@@ -118,6 +118,47 @@ where
     Ok(())
 }
 
+pub fn run_app_esptool(
+    port: Option<&str>,
+    chip: Chip,
+    use_stub: bool,
+    speed: Option<u32>,
+) -> anyhow::Result<()> {
+    let mut command = Command::new(esptools::Tool::EspTool.mount()?.path());
+
+    command.arg("--chip").arg(chip.as_tools_str());
+
+    if !use_stub {
+        command.arg("--no-stub");
+    }
+
+    if let Some(port) = port {
+        command.arg("--port").arg(port);
+    }
+
+    if let Some(speed) = speed {
+        command.arg("--baud").arg(speed.to_string());
+    }
+
+    command.arg("run");
+
+    let output = command
+        .output()
+        .with_context(|| format!("Executing `esptool.py` with command `{command:?}` failed"))?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "`{command:?}` command failed with status: {}.\nStderr output:\n{}",
+            output.status,
+            core::str::from_utf8(&output.stderr).unwrap_or("???")
+        );
+    }
+
+    info!("`esptool.py` command `{command:?}` executed.");
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn erase(
     port: Option<&str>,
@@ -186,6 +227,8 @@ where
             command.arg("--baud").arg(speed.to_string());
         }
 
+        command.arg("--after").arg("no_reset");
+
         command
             .arg("write_flash")
             .arg(format!("0x{:x}", flash_data.offset))
@@ -248,6 +291,8 @@ pub fn erase_esptool(
     if let Some(speed) = speed {
         command.arg("--baud").arg(speed.to_string());
     }
+
+    command.arg("--after").arg("no_reset");
 
     command.arg("erase_flash");
 
@@ -364,7 +409,7 @@ fn new(
         true,
         false,
         Some(chip.to_flash_chip()),
-        ResetAfterOperation::default(),
+        ResetAfterOperation::NoReset,
         ResetBeforeOperation::default(),
     )
     .with_context(|| format!("Connecting to serial port {port_info:?} failed"))?;

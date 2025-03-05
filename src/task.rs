@@ -248,8 +248,8 @@ where
                     )
                     .await;
 
-                    match result {
-                        Ok(_) => break (bundle_id, provision.bundle.name.clone(), readouts),
+                    let (bundle_name, chip) = match result {
+                        Ok((bundle_name, chip)) => (bundle_name, chip),
                         Err(TaskError::Canceled) => continue 'steps,
                         Err(TaskError::Retry) => {
                             self.model
@@ -258,13 +258,35 @@ where
                             continue;
                         }
                         Err(other) => Err(other)?,
-                    }
+                    };
+
+                    let result = Self::handle(
+                        &self.model.clone(),
+                        self.step5_run_app(bundle_name.clone(), chip, input.clone()),
+                        &format!("Running app from bundle `{}` failed", bundle_name),
+                        ErrPolicy::Propagate,
+                        &mut input,
+                    )
+                    .await;
+
+                    match result {
+                        Ok(_) => (),
+                        Err(TaskError::Canceled) => continue 'steps,
+                        Err(TaskError::Retry) => {
+                            self.model
+                                .modify(|inner| inner.state = State::Provision(provision));
+
+                            continue;
+                        }
+                        Err(other) => Err(other)?,
+                    };
+
+                    break (bundle_id, bundle_name, readouts);
                 };
             };
 
             info!("========== PCB provisioning complete, uploading logs ==========");
 
-            // Step 5
             let log_file = self
                 .model
                 .access_mut(|inner| (inner.logs.file.grab(), true));
@@ -477,8 +499,21 @@ where
     async fn step4_provision(
         &mut self,
         mut input: impl TaskInput,
-    ) -> anyhow::Result<(), TaskError> {
+    ) -> anyhow::Result<(String, Chip), TaskError> {
         match select(self.prov_bundle(), input.swallow()).await {
+            Either::First(result) => result.map_err(TaskError::Other),
+        }
+    }
+
+    /// Step 5:
+    /// Optionally, run the app
+    async fn step5_run_app(
+        &mut self,
+        bundle_name: String,
+        chip: Chip,
+        mut input: impl TaskInput,
+    ) -> anyhow::Result<(), TaskError> {
+        match select(self.run_app(bundle_name, chip), input.swallow()).await {
             Either::First(result) => result.map_err(TaskError::Other),
         }
     }
@@ -606,7 +641,7 @@ where
     }
 
     /// Provision the bundle by flashing and optionally efusing the chip with the bundle content
-    async fn prov_bundle(&mut self) -> anyhow::Result<()> {
+    async fn prov_bundle(&mut self) -> anyhow::Result<(String, Chip)> {
         let bundle_name = self.model.modify(|inner| {
             let ps = inner.state.provision_mut();
             ps.provisioning = true;
@@ -766,14 +801,40 @@ where
 
         info!("Burn complete");
 
-        self.model.modify(|inner| {
-            inner.state.success(
-                format!(" {} ", inner.state.provision().bundle.name),
-                "Provisioning complete.",
-            );
-        });
-
         info!("Provisioning bundle `{bundle_name}` complete");
+
+        Ok((bundle_name, chip))
+    }
+
+    async fn run_app(&mut self, bundle_name: String, chip: Chip) -> anyhow::Result<()> {
+        if !self.conf.leave_download_mode {
+            const WAIT_SECS: u64 = 10;
+
+            info!("Running app to finish provisioning");
+
+            self.model.modify(|inner| {
+                inner.state = State::new();
+
+                inner.state.processing_mut().status = "Running app".to_string();
+            });
+
+            let run_use_stub = !self.conf.flash_no_stub;
+            let run_port = self.conf.port.clone();
+            let run_speed = self.conf.flash_speed;
+
+            unblock("run-app", move || {
+                flash::run_app_esptool(run_port.as_deref(), chip, run_use_stub, run_speed)
+            })
+            .await?;
+
+            embassy_time::Timer::after(Duration::from_secs(WAIT_SECS)).await;
+        }
+
+        self.model.modify(|inner| {
+            inner
+                .state
+                .success(format!(" {bundle_name} "), "Provisioning complete.");
+        });
 
         Ok(())
     }
