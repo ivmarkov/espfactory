@@ -4,13 +4,15 @@ use anyhow::Context;
 
 use async_compat::CompatExt;
 
-use clap::{ColorChoice, Parser, ValueEnum};
+use clap::{ColorChoice, Parser, Subcommand, ValueEnum};
 
 use espfactory::loader::Loader;
 use espfactory::uploader::{LogsUploader, MultilogsUploader};
 use espfactory::{self, LOGGER};
 
-use log::LevelFilter;
+use espflash::cli::MonitorArgs;
+
+use log::{error, LevelFilter};
 
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +64,15 @@ struct Cli {
     /// `http:` or `https:` - upload logs to an HTTP(s) server;
     /// `s3:` - upload logs to an S3 bucket
     logs_urls: Vec<Url>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Run a TTY monitor rather than doing factory provisioning
+    Monitor(MonitorArgs),
 }
 
 /// Verbosity
@@ -132,6 +143,10 @@ fn main() {
 
 fn run() -> anyhow::Result<()> {
     let args = Cli::parse();
+
+    if let Some(Command::Monitor(monitor_args)) = args.command {
+        return run_monitor(monitor_args);
+    }
 
     log::set_max_level(LevelFilter::Debug);
 
@@ -206,6 +221,17 @@ fn run() -> anyhow::Result<()> {
         )
         .compat(),
     )?;
+
+    Ok(())
+}
+
+fn run_monitor(monitor_args: MonitorArgs) -> anyhow::Result<()> {
+    match espflash::cli::serial_monitor(monitor_args, &espflash::cli::config::Config::default()) {
+        Ok(_) => {}
+        Err(err) => {
+            error!("Running serial monitor returned an error: {err}");
+        }
+    }
 
     Ok(())
 }
