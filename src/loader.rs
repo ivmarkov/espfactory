@@ -25,7 +25,7 @@ pub enum BundleType {
     /// /images/<partYYY> (optional)    - a binary (.bin) or ELF file to be flashed to partition `partYYY` (image name should match partition name);
     ///                                   if missing, the partition will be left empty
     /// ...
-    /// /efuses/<efuse_name> (optional) - TBD a binary file with an efuse content
+    /// /efuses/<efuse_name> (optional) - a binary file with an efuse content
     Complete,
     /// Binary application image
     ///

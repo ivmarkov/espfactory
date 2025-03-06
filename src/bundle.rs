@@ -32,7 +32,7 @@ pub struct Bundle {
     pub params: Params,
     /// The mapping of partitions to images
     pub parts_mapping: Vec<PartitionMapping>,
-    /// The mapping of efuses to efuse regions (TBD)
+    /// The mapping of efuses to efuse regions
     pub efuse_mapping: Vec<EfuseMapping>,
 }
 
@@ -370,7 +370,7 @@ extra_1,  data, 0x06,            ,   20K,
     /// - `part_table_str`: The partition table as a string
     /// - `bootloader`: The bootloader image
     /// - `images`: The images to be flashed to the partitions, where the key is the partition name
-    /// - `efuses`: The efuses to be programmed, where the key is the efuse name (TBD)
+    /// - `efuses`: The efuses to be programmed, where the key is the efuse name
     pub fn from_parts(
         name: String,
         params: Params,
