@@ -96,12 +96,12 @@ where
         let result = self.step(input).await;
 
         match result {
-            Err(TaskError::Quit) => {
+            Ok(_) | Err(TaskError::Quit) => {
                 info!("Quit by user request");
                 Ok(())
             }
             Err(TaskError::Other(err)) => Err(err)?,
-            Ok(_) | Err(TaskError::Canceled) | Err(TaskError::Retry) | Err(TaskError::Skipped) => {
+            Err(TaskError::Canceled) | Err(TaskError::Retry) | Err(TaskError::Skipped) => {
                 unreachable!(
                     "Task canceled/retried/skipped by user request: {:?}",
                     result
