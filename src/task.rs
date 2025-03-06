@@ -690,9 +690,9 @@ where
             for flash_data in &mut flash_data {
                 if flash_data.encrypted_partition {
                     info!(
-                        "Encrypting image for addr `0x{:08x}`, {}B",
+                        "Encrypting image for addr `0x{:08x}`, {}KB",
                         flash_data.offset,
-                        flash_data.data.len()
+                        flash_data.data.len() / 1024
                     );
 
                     let encrypted_data = {
