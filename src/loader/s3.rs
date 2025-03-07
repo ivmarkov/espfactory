@@ -47,7 +47,6 @@ impl S3Loader {
     /// - `load_bucket`: The name of the S3 bucket to load the bundles from
     /// - `load_prefix`: An optional prefix key to use when loading the bundles
     /// - `delete_after_load`: A flag indicating whether the loaded bundle should be deleted from the bucket after loading
-    ///   Used only when loading a random bundle (i.e., the `id` argument when calling `load` is not provided)
     /// - `logs_bucket`: An optional name of the S3 bucket where the logs are uploaded;
     ///   if provided, the loader will only download a bundle if its logs are not yet uploaded, this preventing
     ///   flashing a bundle multiple times
@@ -168,7 +167,7 @@ impl BundleLoader for S3Loader {
 
                             let bundle_name = key.split('/').next_back().unwrap_or(key).to_string();
 
-                            if id.is_none() && self.delete_after_load {
+                            if self.delete_after_load {
                                 client
                                     .delete_object()
                                     .bucket(&self.load_bucket)

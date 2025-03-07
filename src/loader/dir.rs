@@ -104,7 +104,7 @@ impl BundleLoader for DirLoader {
 
             io::copy(&mut file, &mut write).context("Loading the bundle failed")?;
 
-            if id.is_none() && self.delete_after_load {
+            if self.delete_after_load {
                 fs::remove_file(&path)
                     .context("Removing the random bundle from the directory failed")?;
             }
