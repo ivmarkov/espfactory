@@ -61,8 +61,6 @@ where
         command.arg("--baud").arg(baud);
     }
 
-    command.arg("--after").arg("no_reset");
-
     command
         .arg("summary")
         .arg("--format")
@@ -121,8 +119,6 @@ where
     if let Some(baud) = baud {
         command.arg("--baud").arg(baud);
     }
-
-    command.arg("--after").arg("no_reset");
 
     command.arg("--do-not-confirm");
 
@@ -195,8 +191,6 @@ where
     if let Some(baud) = baud {
         command.arg("--baud").arg(baud);
     }
-
-    command.arg("--after").arg("no_reset");
 
     // ... or else we need to type "BURN" in the terminal which is impossible
     // as the provisioning process is not interactive
