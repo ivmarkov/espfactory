@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use anyhow::Context;
 
@@ -72,19 +72,16 @@ where
         command.arg(value);
     }
 
-    command
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .stdin(Stdio::null());
-
-    let status = command
-        .status()
+    let output = command
+        .output()
         .with_context(|| format!("Executing the eFuse tool with command `{command:?}` failed"))?;
 
-    if !status.success() {
+    if !output.status.success() {
         anyhow::bail!(
-            "eFuse tool command {command:?} failed with status: {}. Is the PCB connected?",
-            status
+            "eFuse tool command {command:?} failed with status: {}. Is the PCB connected?\nStderr output:\n{}\nStdout output:\n{}",
+            output.status,
+            core::str::from_utf8(&output.stderr).unwrap_or("???"),
+            core::str::from_utf8(&output.stdout).unwrap_or("???")
         );
     }
 
